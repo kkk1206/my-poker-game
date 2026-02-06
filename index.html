@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>朋友連線測試</h1>
+    <button onclick="sendAction()">點我發送跟注</button>
+    <div id="status">等待動作...</div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        function sendAction() {
+            socket.emit('playerAction', '朋友 A 剛剛跟注了 100 元！');
+        }
+
+        socket.on('updateUI', (msg) => {
+            document.getElementById('status').innerText = msg;
+        });
+    </script>
+</body>
+</html>
