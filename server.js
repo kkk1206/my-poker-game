@@ -21,7 +21,6 @@ io.on('connection', (socket) => {
 
 // 優先使用雲端平台分配的 Port，如果沒有則使用 3000
 const PORT = process.env.PORT || 3000;
-
-http.listen(PORT, () => {
-    console.log(`遊戲伺服器已啟動，連接埠：${PORT}`);
+http.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
 });
