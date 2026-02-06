@@ -45,9 +45,15 @@
     💰 總底池: <span id="pot-amount">0</span>
 </div>
 
-<div class="player-actions" style="margin: 20px;">
-    <button onclick="takeAction('call')" style="background: #2196F3;">跟注 (50)</button>
-    <button onclick="takeAction('fold')" style="background: #f44336;">蓋牌</button>
+<div class="player-actions" style="margin: 20px; background: rgba(0,0,0,0.2); padding: 15px; border-radius: 10px;">
+    <button onclick="takeAction('check')" style="background: #4CAF50;">過牌 (Check)</button>
+    <button onclick="takeAction('call')" style="background: #2196F3;">跟注 (Call)</button>
+    <button onclick="takeAction('fold')" style="background: #f44336;">蓋牌 (Fold)</button>
+    
+    <div style="margin-top: 10px;">
+        <input type="number" id="raise-amount" placeholder="金額" style="width: 80px; padding: 10px;">
+        <button onclick="raiseBet()" style="background: #FF5722;">加注 (Raise)</button>
+    </div>
 </div>
 
 <div id="setup" style="margin: 10px;">
@@ -55,7 +61,25 @@
     <button onclick="changeName()" style="padding: 10px; background: #FF9800;">更名</button>
 </div>
 
+<div style="margin-top: 30px; font-size: 14px; background: rgba(0,0,0,0.2); padding: 10px;">
+    <strong>牌型等級參考：</strong><br>
+    同花大順 > 同花順 > 四條 > 葫蘆 > 同花 > 順子 > 三條 > 兩對 > 對子 > 高牌
+</div>
+
+<div id="bet-info" style="font-size: 18px; color: #00e676;">
+    📢 本輪最高注額: <span id="max-bet">0</span>
+</div>
+
 <button onclick="autoShowdown()" style="background: #9c27b0;">🤖 自動判斷勝負</button>
+
+// 增加一個 Check 按鈕
+<button onclick="takeAction('check')" style="background: #4CAF50;">過牌 (Check)</button>
+
+// server.js 處理
+if (data.action === 'check') {
+    io.emit('gameLog', `玩家 ${player.name} 過牌`);
+    // 直接切換到下一位，不需要扣錢
+}
 
     <script src="/socket.io/socket.io.js"></script>
 
@@ -75,6 +99,14 @@
     socket.on('triggerWinner', (winnerId) => {
         socket.emit('declareWinner', winnerId);
     });
+    </script>
+
+    <script>
+        function raiseBet() {
+            const amt = document.getElementById('raise-amount').value;
+            if (!amt) return alert("請輸入加注金額");
+            socket.emit('playerAction', { action: 'raise', amount: amt });
+        }
     </script>
 
     <script>
@@ -119,35 +151,51 @@
             logDiv.innerHTML += `<p>${msg}</p>`;
         });
 
-// 更新玩家清單並標示「當前玩家」
-    socket.on('updatePlayerList', (data) => {
-        const container = document.getElementById('players-container');
-        container.innerHTML = '';
-        for (let id in data.players) {
-            const p = data.players[id];
-            const pDiv = document.createElement('div');
-            pDiv.style.margin = "10px";
-            pDiv.style.padding = "10px";
-            pDiv.style.borderRadius = "5px";
-            
-            // 如果是目前輪到的玩家，加金框
-            if (id === data.currentTurn) {
-                pDiv.style.border = "2px solid #ffeb3b";
-                pDiv.style.background = "rgba(255, 235, 59, 0.2)";
+    // 更新玩家清單並標示「當前玩家」
+        socket.on('updatePlayerList', (data) => {
+            const container = document.getElementById('players-container');
+            container.innerHTML = '';
+            for (let id in data.players) {
+                const p = data.players[id];
+                const pDiv = document.createElement('div');
+                
+                // 關鍵：根據是否為當前玩家，加入對應的 class
+                pDiv.className = `player-card ${id === data.currentTurn ? 'active-turn' : ''}`;
+                
+                const isMe = id === socket.id ? " (你)" : "";
+                // 增加顯示手牌狀態 (蓋牌或有牌)
+                const status = p.hand.length === 0 && gameState.phase !== 'deal' ? " (已蓋牌)" : "";
+                
+                pDiv.innerHTML = `
+                    <div style="font-weight: bold;">👤 ${p.name}${isMe}</div>
+                    <div style="color: #ffeb3b;">💰 ${p.chips}</div>
+                    <div style="font-size: 10px; color: #aaa;">${status}</div>
+                `;
+                container.appendChild(pDiv);
             }
+        });
 
-            const isMe = id === socket.id ? " (你)" : "";
-            pDiv.innerHTML = `<div>👤 ${p.name}${isMe}</div><div>💰 ${p.chips}</div>`;
-            container.appendChild(pDiv);
-        }
-    });
-
-    socket.on('updateStatus', (data) => {
-        document.getElementById('pot-amount').innerText = data.pot;
-    });
+        socket.on('updateStatus', (data) => {
+            document.getElementById('pot-amount').innerText = data.pot;
+            // 如果伺服器有回傳 currentMaxBet 也要更新
+            if(data.currentMaxBet !== undefined) {
+                document.getElementById('max-bet').innerText = data.currentMaxBet;
+            }
+        });
 
         // 在 startGame 時清空手牌畫面
         socket.on('updateBoard', (cards) => {
+            const boardDiv = document.getElementById('board');
+            boardDiv.innerHTML = ''; 
+            
+            if (cards.length === 0) {
+                // 重設手牌區域
+                const cardsArea = document.getElementById('cards-area');
+                if (cardsArea) cardsArea.innerHTML = '';
+                document.getElementById('card').style.display = 'block';
+                document.getElementById('card').innerText = '?';
+                return;
+            }
             if (cards.length === 0) {
                 document.getElementById('cards-area').innerHTML = '';
                 document.getElementById('card').style.display = 'block';
@@ -172,6 +220,26 @@
         /* 新增一些樣式讓公牌變小一點 */
         .card-display.small {
             width: 60px; height: 80px; font-size: 24px; line-height: 80px; margin: 0;
+        }
+
+        #players-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            padding: 15px;
+        }
+        .player-card {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .active-turn {
+            border-color: #ffeb3b !important;
+            background: rgba(255, 235, 59, 0.15) !important;
+            box-shadow: 0 0 15px rgba(255, 235, 59, 0.5);
         }
     </style>
 </body>
