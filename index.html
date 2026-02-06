@@ -36,6 +36,11 @@
 
     <div id="log"></div>
 
+<div id="player-list" style="background: rgba(0,0,0,0.3); padding: 10px; margin: 10px auto; max-width: 500px; border-radius: 10px;">
+    <h4>在線玩家</h4>
+    <div id="players-container" style="display: flex; justify-content: space-around; flex-wrap: wrap;"></div>
+</div>
+
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
@@ -73,6 +78,29 @@
         socket.on('gameLog', (msg) => {
             const logDiv = document.getElementById('log');
             logDiv.innerHTML += `<p>${msg}</p>`;
+        });
+
+        socket.on('updatePlayerList', (players) => {
+            const container = document.getElementById('players-container');
+            container.innerHTML = '';
+            for (let id in players) {
+                const p = players[id];
+                const pDiv = document.createElement('div');
+                pDiv.style.margin = "5px";
+                // 如果是自己，加個顏色標記
+                const isMe = id === socket.id ? " (你)" : "";
+                pDiv.innerHTML = `<div>👤 ${p.name}${isMe}</div><div>💰 ${p.chips}</div>`;
+                container.appendChild(pDiv);
+            }
+        });
+
+        // 在 startGame 時清空手牌畫面
+        socket.on('updateBoard', (cards) => {
+            if (cards.length === 0) {
+                document.getElementById('cards-area').innerHTML = '';
+                document.getElementById('card').style.display = 'block';
+                document.getElementById('card').innerText = '?';
+            }
         });
 
         // 接收公牌並顯示
