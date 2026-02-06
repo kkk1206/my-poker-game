@@ -13,9 +13,27 @@
     </style>
 </head>
 <body>
-    <h1>♠️ 朋友連線對局 ♣️</h1>
-    <div id="card" class="card-display">?</div>
-    <button onclick="draw()">抽一張牌</button>
+    <h1>♠️ 德州撲克連線桌 ♣️</h1>
+    
+    <div id="community-cards" style="margin-bottom: 20px;">
+        <h3>桌面公牌</h3>
+        <div id="board" style="display: flex; justify-content: center; gap: 10px; min-height: 80px;">
+            </div>
+    </div>
+
+    <div id="my-hand">
+        <h3>你的手牌</h3>
+        <div id="card" class="card-display">?</div>
+    </div>
+
+    <div class="controls">
+        <button onclick="draw()">抽手牌</button>
+        <hr>
+        <p>管理員控制：</p>
+        <button onclick="start()">新局開始</button>
+        <button onclick="next()">發公牌</button>
+    </div>
+
     <div id="log"></div>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -25,22 +43,56 @@
         function draw() {
             socket.emit('drawCard');
         }
+        function start() { socket.emit('startGame'); }
+        function next() { socket.emit('nextPhase'); }
 
-        socket.on('yourCard', (card) => {
-            const cardDiv = document.getElementById('card');
-            cardDiv.innerText = card.value + card.suit;
-            // 如果是紅心或方塊，變紅色
-            if (card.suit === '♥' || card.suit === '♦') {
-                cardDiv.classList.add('red');
-            } else {
-                cardDiv.classList.remove('red');
-            }
-        });
+        socket.on('yourHand', (hand) => {
+    const handDiv = document.getElementById('my-hand');
+    // 找到或建立一個容器來放這兩張牌
+    let cardsArea = document.getElementById('cards-area');
+    if (!cardsArea) {
+        cardsArea = document.createElement('div');
+        cardsArea.id = 'cards-area';
+        cardsArea.style.display = 'flex';
+        cardsArea.style.justifyContent = 'center';
+        cardsArea.style.gap = '10px';
+        handDiv.appendChild(cardsArea);
+    }
+    
+    cardsArea.innerHTML = ''; // 清空舊手牌
+    hand.forEach(card => {
+        const c = document.createElement('div');
+        c.className = 'card-display ' + (card.suit === '♥' || card.suit === '♦' ? 'red' : '');
+        c.style.margin = "0"; // 覆蓋原本的 auto
+        c.innerText = card.value + card.suit;
+        cardsArea.appendChild(c);
+    });
+    document.getElementById('card').style.display = 'none'; // 隱藏原本的問號框
+});
 
         socket.on('gameLog', (msg) => {
             const logDiv = document.getElementById('log');
             logDiv.innerHTML += `<p>${msg}</p>`;
         });
+
+        // 接收公牌並顯示
+        socket.on('updateBoard', (cards) => {
+            const boardDiv = document.getElementById('board');
+            boardDiv.innerHTML = ''; // 清空舊牌
+            cards.forEach(card => {
+                const c = document.createElement('div');
+                c.className = 'card-display small ' + (card.suit === '♥' || card.suit === '♦' ? 'red' : '');
+                c.innerText = card.value + card.suit;
+                boardDiv.appendChild(c);
+            });
+        });
     </script>
+
+    <style>
+        /* 新增一些樣式讓公牌變小一點 */
+        .card-display.small {
+            width: 60px; height: 80px; font-size: 24px; line-height: 80px; margin: 0;
+        }
+    </style>
 </body>
 </html>
