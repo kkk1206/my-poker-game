@@ -41,7 +41,42 @@
     <div id="players-container" style="display: flex; justify-content: space-around; flex-wrap: wrap;"></div>
 </div>
 
+<div id="game-status" style="font-size: 24px; color: #ffeb3b; margin: 10px;">
+    💰 總底池: <span id="pot-amount">0</span>
+</div>
+
+<div class="player-actions" style="margin: 20px;">
+    <button onclick="takeAction('call')" style="background: #2196F3;">跟注 (50)</button>
+    <button onclick="takeAction('fold')" style="background: #f44336;">蓋牌</button>
+</div>
+
+<div id="setup" style="margin: 10px;">
+    <input type="text" id="name-input" placeholder="輸入你的暱稱" style="padding: 10px;">
+    <button onclick="changeName()" style="padding: 10px; background: #FF9800;">更名</button>
+</div>
+
+<button onclick="autoShowdown()" style="background: #9c27b0;">🤖 自動判斷勝負</button>
+
     <script src="/socket.io/socket.io.js"></script>
+
+    <script>
+    function autoShowdown() {
+        if (confirm("確定要讓電腦判斷最強牌型嗎？")) {
+            socket.emit('showdown');
+        }
+    }
+
+    function changeName() {
+        const name = document.getElementById('name-input').value;
+        socket.emit('setName', name);
+    }
+    
+    // 監聽伺服器的贏家觸發
+    socket.on('triggerWinner', (winnerId) => {
+        socket.emit('declareWinner', winnerId);
+    });
+    </script>
+
     <script>
         const socket = io();
         
@@ -50,6 +85,10 @@
         }
         function start() { socket.emit('startGame'); }
         function next() { socket.emit('nextPhase'); }
+        function takeAction(actionType) {
+        socket.emit('playerAction', { action: actionType });
+    }
+
 
         socket.on('yourHand', (hand) => {
     const handDiv = document.getElementById('my-hand');
@@ -80,19 +119,32 @@
             logDiv.innerHTML += `<p>${msg}</p>`;
         });
 
-        socket.on('updatePlayerList', (players) => {
-            const container = document.getElementById('players-container');
-            container.innerHTML = '';
-            for (let id in players) {
-                const p = players[id];
-                const pDiv = document.createElement('div');
-                pDiv.style.margin = "5px";
-                // 如果是自己，加個顏色標記
-                const isMe = id === socket.id ? " (你)" : "";
-                pDiv.innerHTML = `<div>👤 ${p.name}${isMe}</div><div>💰 ${p.chips}</div>`;
-                container.appendChild(pDiv);
+// 更新玩家清單並標示「當前玩家」
+    socket.on('updatePlayerList', (data) => {
+        const container = document.getElementById('players-container');
+        container.innerHTML = '';
+        for (let id in data.players) {
+            const p = data.players[id];
+            const pDiv = document.createElement('div');
+            pDiv.style.margin = "10px";
+            pDiv.style.padding = "10px";
+            pDiv.style.borderRadius = "5px";
+            
+            // 如果是目前輪到的玩家，加金框
+            if (id === data.currentTurn) {
+                pDiv.style.border = "2px solid #ffeb3b";
+                pDiv.style.background = "rgba(255, 235, 59, 0.2)";
             }
-        });
+
+            const isMe = id === socket.id ? " (你)" : "";
+            pDiv.innerHTML = `<div>👤 ${p.name}${isMe}</div><div>💰 ${p.chips}</div>`;
+            container.appendChild(pDiv);
+        }
+    });
+
+    socket.on('updateStatus', (data) => {
+        document.getElementById('pot-amount').innerText = data.pot;
+    });
 
         // 在 startGame 時清空手牌畫面
         socket.on('updateBoard', (cards) => {
