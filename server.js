@@ -3,24 +3,47 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
-// 讓朋友訪問時看到 index.html
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/index.html');
 });
 
-// 當有人連線進來時
-io.on('connection', (socket) => {
-    console.log('一位玩家連線了！');
+// 德州撲克牌組產生器
+function createDeck() {
+    const suits = ['♠', '♥', '♦', '♣'];
+    const values = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+    let deck = [];
+    for (let s of suits) {
+        for (let v of values) {
+            deck.push({ suit: s, value: v });
+        }
+    }
+    // 洗牌 (Fisher-Yates Shuffle)
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+}
 
-    // 接收到「玩家動作」事件
-    socket.on('playerAction', (msg) => {
-        // 把這個動作廣播給所有人
-        io.emit('updateUI', msg);
+let gameDeck = createDeck();
+
+io.on('connection', (socket) => {
+    console.log('玩家連線：' + socket.id);
+
+    // 當玩家點擊「抽牌」時
+    socket.on('drawCard', () => {
+        if (gameDeck.length === 0) gameDeck = createDeck(); // 沒牌了就重新洗牌
+        const card = gameDeck.pop();
+        
+        // 只傳送給點擊的那個人 (私訊)
+        socket.emit('yourCard', card);
+        
+        // 告訴所有人有人抽牌了（但不說是什麼牌）
+        io.emit('gameLog', `玩家 ${socket.id.substring(0, 5)} 抽了一張牌`);
     });
 });
 
-// 優先使用雲端平台分配的 Port，如果沒有則使用 3000
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });

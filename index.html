@@ -1,19 +1,45 @@
 <!DOCTYPE html>
 <html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>線上簡易撲克</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #2d5a27; color: white; }
+        .card-display { font-size: 50px; background: white; color: black; width: 100px; height: 140px; 
+                        margin: 20px auto; border-radius: 10px; line-height: 140px; }
+        .red { color: red; }
+        button { padding: 15px 30px; font-size: 18px; cursor: pointer; border-radius: 5px; border: none; }
+        #log { font-size: 12px; color: #ccc; margin-top: 20px; }
+    </style>
+</head>
 <body>
-    <h1>朋友連線測試</h1>
-    <button onclick="sendAction()">點我發送跟注</button>
-    <div id="status">等待動作...</div>
+    <h1>♠️ 朋友連線對局 ♣️</h1>
+    <div id="card" class="card-display">?</div>
+    <button onclick="draw()">抽一張牌</button>
+    <div id="log"></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        function sendAction() {
-            socket.emit('playerAction', '朋友 A 剛剛跟注了 100 元！');
+        
+        function draw() {
+            socket.emit('drawCard');
         }
 
-        socket.on('updateUI', (msg) => {
-            document.getElementById('status').innerText = msg;
+        socket.on('yourCard', (card) => {
+            const cardDiv = document.getElementById('card');
+            cardDiv.innerText = card.value + card.suit;
+            // 如果是紅心或方塊，變紅色
+            if (card.suit === '♥' || card.suit === '♦') {
+                cardDiv.classList.add('red');
+            } else {
+                cardDiv.classList.remove('red');
+            }
+        });
+
+        socket.on('gameLog', (msg) => {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += `<p>${msg}</p>`;
         });
     </script>
 </body>
