@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -12,7 +13,22 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // 主路由返回 index.html
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    
+    // 檢查檔案是否存在
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        // 檔案不存在時顯示詳細錯誤
+        res.status(404).send(`
+            <h1>Error: index.html not found</h1>
+            <p>Expected location: ${indexPath}</p>
+            <p>Current directory: ${__dirname}</p>
+            <p>Files in current directory:</p>
+            <pre>${fs.readdirSync(__dirname).join('\n')}</pre>
+            <p>Please make sure index.html is in the 'public' folder</p>
+        `);
+    }
 });
 
 // 遊戲房間
@@ -61,9 +77,9 @@ function createGameState(players) {
         deck: createDeck(),
         communityCards: [],
         pot: 0,
-        currentPlayer: 0,
+        currentPlayerIdx: 0,
         stage: 'preflop',
-        dealer: 0,
+        dealerIdx: 0,
         smallBlind: 10,
         bigBlind: 20
     };
@@ -104,15 +120,15 @@ function startNewRound(gameState) {
     gameState.communityCards = [];
     gameState.pot = 0;
     gameState.stage = 'preflop';
-    gameState.dealer = (gameState.dealer + 1) % gameState.players.length;
-    gameState.currentPlayer = (gameState.dealer + 3) % gameState.players.length;
+    gameState.dealerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+    gameState.currentPlayerIdx = (gameState.dealerIdx + 3) % gameState.players.length;
 
     // 發牌
     dealCards(gameState);
 
     // 盲注
-    const smallBlindIdx = (gameState.dealer + 1) % gameState.players.length;
-    const bigBlindIdx = (gameState.dealer + 2) % gameState.players.length;
+    const smallBlindIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+    const bigBlindIdx = (gameState.dealerIdx + 2) % gameState.players.length;
     
     gameState.players[smallBlindIdx].currentBet = gameState.smallBlind;
     gameState.players[smallBlindIdx].chips -= gameState.smallBlind;
@@ -128,7 +144,11 @@ function startNewRound(gameState) {
 // 處理玩家行動
 function handleAction(gameState, playerId, action, amount = 0) {
     const playerIdx = gameState.players.findIndex(p => p.id === playerId);
-    if (playerIdx !== gameState.currentPlayer) {
+    if (playerIdx === -1) {
+        return { error: '找不到玩家' };
+    }
+    
+    if (playerIdx !== gameState.currentPlayerIdx) {
         return { error: '不是你的回合' };
     }
 
@@ -175,7 +195,7 @@ function handleAction(gameState, playerId, action, amount = 0) {
 
 // 移到下一個玩家
 function moveToNextPlayer(gameState) {
-    let nextPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
+    let nextPlayer = (gameState.currentPlayerIdx + 1) % gameState.players.length;
     let count = 0;
     
     while (gameState.players[nextPlayer].folded && count < gameState.players.length) {
@@ -183,7 +203,7 @@ function moveToNextPlayer(gameState) {
         count++;
     }
     
-    gameState.currentPlayer = nextPlayer;
+    gameState.currentPlayerIdx = nextPlayer;
 }
 
 // 檢查回合是否完成
@@ -226,9 +246,9 @@ function advanceStage(gameState) {
             return;
     }
 
-    gameState.currentPlayer = (gameState.dealer + 1) % gameState.players.length;
-    while (gameState.players[gameState.currentPlayer].folded) {
-        gameState.currentPlayer = (gameState.currentPlayer + 1) % gameState.players.length;
+    gameState.currentPlayerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+    while (gameState.players[gameState.currentPlayerIdx].folded) {
+        gameState.currentPlayerIdx = (gameState.currentPlayerIdx + 1) % gameState.players.length;
     }
 }
 
@@ -258,6 +278,7 @@ function broadcastGameState(gameState) {
     room.players.forEach(player => {
         const playerState = {
             ...gameState,
+            currentPlayer: gameState.players[gameState.currentPlayerIdx]?.id,
             players: gameState.players.map(p => ({
                 ...p,
                 cards: p.id === player.id ? p.cards : (p.cards.length > 0 ? [{}, {}] : [])
@@ -369,9 +390,13 @@ function handleStartGame(roomId) {
 
     room.players.forEach(player => {
         if (player.ws.readyState === WebSocket.OPEN) {
+            const playerState = {
+                ...gameState,
+                currentPlayer: gameState.players[gameState.currentPlayerIdx]?.id
+            };
             player.ws.send(JSON.stringify({
                 type: 'gameStarted',
-                gameState: gameState
+                gameState: playerState
             }));
         }
     });
