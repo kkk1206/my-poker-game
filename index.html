@@ -72,15 +72,6 @@
 
 <button onclick="autoShowdown()" style="background: #9c27b0;">🤖 自動判斷勝負</button>
 
-// 增加一個 Check 按鈕
-<button onclick="takeAction('check')" style="background: #4CAF50;">過牌 (Check)</button>
-
-// server.js 處理
-if (data.action === 'check') {
-    io.emit('gameLog', `玩家 ${player.name} 過牌`);
-    // 直接切換到下一位，不需要扣錢
-}
-
     <script src="/socket.io/socket.io.js"></script>
 
     <script>
@@ -146,10 +137,11 @@ if (data.action === 'check') {
     document.getElementById('card').style.display = 'none'; // 隱藏原本的問號框
 });
 
-        socket.on('gameLog', (msg) => {
-            const logDiv = document.getElementById('log');
-            logDiv.innerHTML += `<p>${msg}</p>`;
-        });
+    socket.on('gameLog', (msg) => {
+        const logDiv = document.getElementById('log');
+        logDiv.innerHTML += `<p>${msg}</p>`;
+        logDiv.scrollTop = logDiv.scrollHeight; // 自動捲到底部
+    });
 
     // 更新玩家清單並標示「當前玩家」
         socket.on('updatePlayerList', (data) => {
@@ -169,10 +161,17 @@ if (data.action === 'check') {
                 pDiv.innerHTML = `
                     <div style="font-weight: bold;">👤 ${p.name}${isMe}</div>
                     <div style="color: #ffeb3b;">💰 ${p.chips}</div>
+                    <div style="font-size: 14px; color: #00e676;">🪙 投入: ${p.roundBet}</div>
                     <div style="font-size: 10px; color: #aaa;">${status}</div>
                 `;
                 container.appendChild(pDiv);
             }
+
+            const isMyTurn = (data.currentTurn === socket.id);
+            document.querySelectorAll('.player-actions button').forEach(btn => {
+                btn.disabled = !isMyTurn;
+                btn.style.opacity = isMyTurn ? "1" : "0.5";
+            });
         });
 
         socket.on('updateStatus', (data) => {
@@ -186,30 +185,27 @@ if (data.action === 'check') {
         // 在 startGame 時清空手牌畫面
         socket.on('updateBoard', (cards) => {
             const boardDiv = document.getElementById('board');
+            const cardQuestDiv = document.getElementById('card'); // 原本的 "?" 框
+            const cardsArea = document.getElementById('cards-area'); // 玩家手牌區域
+
+            // 1. 先清空桌面公牌區
             boardDiv.innerHTML = ''; 
-            
-            if (cards.length === 0) {
-                // 重設手牌區域
-                const cardsArea = document.getElementById('cards-area');
-                if (cardsArea) cardsArea.innerHTML = '';
-                document.getElementById('card').style.display = 'block';
-                document.getElementById('card').innerText = '?';
+
+            // 2. 如果傳入的是空陣列 (代表新局重置)
+            if (!cards || cards.length === 0) {
+                if (cardsArea) cardsArea.innerHTML = ''; // 清空手牌畫面
+                cardQuestDiv.style.display = 'block';    // 顯示問號框
+                cardQuestDiv.innerText = '?';
                 return;
             }
-            if (cards.length === 0) {
-                document.getElementById('cards-area').innerHTML = '';
-                document.getElementById('card').style.display = 'block';
-                document.getElementById('card').innerText = '?';
-            }
-        });
 
-        // 接收公牌並顯示
-        socket.on('updateBoard', (cards) => {
-            const boardDiv = document.getElementById('board');
-            boardDiv.innerHTML = ''; // 清空舊牌
+            // 3. 如果有公牌，隱藏問號框並渲染牌組
+            cardQuestDiv.style.display = 'none'; 
             cards.forEach(card => {
                 const c = document.createElement('div');
-                c.className = 'card-display small ' + (card.suit === '♥' || card.suit === '♦' ? 'red' : '');
+                // 判斷花色是否為紅色
+                const isRed = (card.suit === '♥' || card.suit === '♦') ? 'red' : '';
+                c.className = `card-display small ${isRed}`;
                 c.innerText = card.value + card.suit;
                 boardDiv.appendChild(c);
             });
@@ -240,6 +236,26 @@ if (data.action === 'check') {
             border-color: #ffeb3b !important;
             background: rgba(255, 235, 59, 0.15) !important;
             box-shadow: 0 0 15px rgba(255, 235, 59, 0.5);
+        }
+
+        /* 針對手機觸控優化 */
+        button {
+            min-height: 50px; /* 增加點擊區域 */
+            margin: 5px;
+            touch-action: manipulation;
+        }
+
+        .player-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr; /* 兩兩並排，方便大拇指按 */
+            gap: 10px;
+        }
+
+        #my-hand .card-display {
+            width: 70px; /* 手機上牌縮小一點 */
+            height: 100px;
+            line-height: 100px;
+            font-size: 30px;
         }
     </style>
 </body>

@@ -3,6 +3,12 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 const Solver = require('pokersolver').Hand;
+// 修正格式轉換：將 '10' 轉換為 'T' 以符合 pokersolver 要求
+const formatCardForSolver = (c) => {
+    let v = c.value === '10' ? 'T' : c.value;
+    let s = { '♠': 's', '♥': 'h', '♦': 'd', '♣': 'c' }[c.suit];
+    return v + s;
+};
 
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/index.html');
@@ -26,21 +32,6 @@ function createDeck() {
     return deck;
 }
 
-//新增一個切換回合的檢查
-function checkRoundOver() {
-    const activePlayers = gameState.playerOrder.filter(id => gameState.players[id].hand.length > 0);
-    const allActed = gameState.playersActed >= activePlayers.length;
-    
-    // 檢查所有人的投注是否都等於 currentMaxBet (簡化邏輯)
-    if (allActed) {
-        // 重置本輪狀態，進入下一階段
-        gameState.playersActed = 0;
-        gameState.currentMaxBet = 0;
-        // 自動呼叫 nextPhase 邏輯
-        handleNextPhase(); 
-    }
-}
-
 function nextTurn() {
     let nextIndex = gameState.currentTurnIndex;
     do {
@@ -55,25 +46,8 @@ function nextTurn() {
     });
 }
 
-function checkRoundOver() {
-    const activePlayers = gameState.playerOrder.filter(id => gameState.players[id].hand.length > 0);
-    
-    // 如果所有人都表態過，且沒有人需要再補錢 (這裡我們先簡化為人數達標)
-    if (gameState.playersActed >= activePlayers.length) {
-        io.emit('gameLog', "--- 本輪結束，進入下一階段 ---");
-        
-        // 重置本輪計數器
-        gameState.playersActed = 0;
-        
-        // 自動執行下一階段
-        handleNextPhase(); 
-        return true;
-    }
-    return false;
-}
-
 function handleNextPhase() {
-    if (gameState.phase === 'deal') {
+    if (gameState.phase === 'preflop') { 
         gameState.communityCards.push(gameState.deck.pop(), gameState.deck.pop(), gameState.deck.pop());
         gameState.phase = 'flop';
     } else if (gameState.phase === 'flop') {
@@ -83,11 +57,11 @@ function handleNextPhase() {
         gameState.communityCards.push(gameState.deck.pop());
         gameState.phase = 'river';
     } else if (gameState.phase === 'river') {
-        io.emit('gameLog', "🔔 所有公牌已開，請點擊自動判定勝負！");
-        // 這裡也可以改成自動觸發 showdown
+        io.emit('gameLog', "🔔 所有公牌已開，請進行最後下注或點擊判定！");
+        return; // River 之後不會自動跳轉，需等待 Showdown
     }
 
-    // 關鍵：進入下一階段時，清空所有人的本輪投注紀錄
+    // 重置本輪下注資訊
     for (let id in gameState.players) {
         gameState.players[id].roundBet = 0;
     }
@@ -95,18 +69,71 @@ function handleNextPhase() {
     gameState.playersActed = 0;
 
     io.emit('updateBoard', gameState.communityCards);
-    io.emit('updateStatus', { pot: gameState.pot, phase: gameState.phase });
+    io.emit('updateStatus', { pot: gameState.pot, phase: gameState.phase, currentMaxBet: 0 });
     
-    // 每輪公牌發完後，動作權通常回到第一個沒蓋牌的人
-    gameState.currentTurnIndex = 0; 
-    while(gameState.players[gameState.playerOrder[gameState.currentTurnIndex]].hand.length === 0) {
-        gameState.currentTurnIndex = (gameState.currentTurnIndex + 1) % gameState.playerOrder.length;
+    // 回合結束後，回到第一個沒蓋牌的人開始
+    gameState.currentTurnIndex = 0;
+    findNextActivePlayer(); // 封裝一個尋找玩家的邏輯
+    broadcastPlayerList();
+}
+
+// 處理全場蓋牌只剩一人的情況
+function handleSoloWinner(winnerId) {
+    const winner = gameState.players[winnerId];
+    io.emit('gameLog', `🎊 其他人都蓋牌了，${winner.name} 贏得底池 ${gameState.pot}！`);
+    winner.chips += gameState.pot;
+    gameState.pot = 0;
+    resetGame(); // 回到等待或開始新局
+}
+
+function resetGame() {
+    gameState.phase = 'waiting';
+    gameState.communityCards = [];
+    gameState.pot = 0;
+    gameState.currentMaxBet = 0;
+    gameState.playersActed = 0;
+    for (let id in gameState.players) {
+        gameState.players[id].hand = [];
+        gameState.players[id].roundBet = 0;
     }
+    io.emit('updateBoard', []);
+    io.emit('updateStatus', { pot: 0, phase: 'waiting' });
+}
+
+function checkRoundOver() {
+    const activePlayers = gameState.playerOrder.filter(id => gameState.players[id].hand.length > 0);
     
+    // 所有人注額是否等於目前最高注額
+    const allMatched = activePlayers.every(id => gameState.players[id].roundBet === gameState.currentMaxBet);
+    
+    // 所有人是否都點過按鈕 (Acted)
+    // 注意：Pre-flop 時，若沒人加注，大盲注必須是最後一個 Acted 的人
+    if (gameState.playersActed >= activePlayers.length && allMatched) {
+        handleNextPhase();
+        return true;
+    }
+    return false;
+}
+
+function broadcastPlayerList() {
     io.emit('updatePlayerList', { 
         players: gameState.players, 
         currentTurn: gameState.playerOrder[gameState.currentTurnIndex] 
     });
+}
+
+function findNextActivePlayer(startIndex) {
+    let idx = startIndex;
+    let count = 0;
+    while (count < gameState.playerOrder.length) {
+        let player = gameState.players[gameState.playerOrder[idx]];
+        if (player && player.hand.length > 0) {
+            return idx; // 找到下一個有牌的人
+        }
+        idx = (idx + 1) % gameState.playerOrder.length;
+        count++;
+    }
+    return idx;
 }
 
 let gameDeck = createDeck();
@@ -138,43 +165,41 @@ io.on('connection', (socket) => {
     io.emit('updatePlayerList', { players: gameState.players, currentTurn: gameState.playerOrder[gameState.currentTurnIndex] });
 
     socket.on('startGame', () => {
-        gameState.deck = createDeck();
-        gameState.communityCards = [];
-        gameState.phase = 'deal';
-        gameState.pot = 0;
-        gameState.currentTurnIndex = 0; // 從第一個玩家開始
-        for (let id in gameState.players) {
-            gameState.players[id].hand = [];
-        }
-        const p1 = gameState.playerOrder[0];
-        const p2 = gameState.playerOrder[1];
+    if (gameState.playerOrder.length < 2) return io.emit('gameLog', "❌ 至少需要 2 人才能開始");
 
+    gameState.deck = createDeck();
+    gameState.communityCards = [];
+    gameState.phase = 'preflop'; // 統一名稱
+    gameState.pot = 0;
+    gameState.currentMaxBet = 20;
+    gameState.playersActed = 0;
 
-        // 自動發牌給所有在線玩家
-        gameState.playerOrder.forEach(id => {
-            const hand = [gameState.deck.pop(), gameState.deck.pop()];
-            gameState.players[id].hand = hand;
-            // 私密發送手牌給該玩家
-            io.to(id).emit('yourHand', hand);
-        });
+    const p1 = gameState.playerOrder[0]; // 小盲
+    const p2 = gameState.playerOrder[1]; // 大盲
 
-        io.emit('gameLog', "🎴 遊戲開始，手牌已發放！");
-
-        if (p1 && gameState.players[p1]) {
-            gameState.players[p1].chips -= 10;
-            gameState.pot += 10;
-        }
-        if (p2 && gameState.players[p2]) {
-            gameState.players[p2].chips -= 20;
-            gameState.pot += 20;
-        }
-        io.emit('gameLog', `📢 盲注已扣除：${gameState.players[p1].name} (10), ${gameState.players[p2].name} (20)`);
-        
-        io.emit('gameLog', "新局開始！由第一位玩家開始動作。");
-        io.emit('updateBoard', []);
-        io.emit('updateStatus', { pot: gameState.pot, phase: gameState.phase });
-        io.emit('updatePlayerList', { players: gameState.players, currentTurn: gameState.playerOrder[gameState.currentTurnIndex] });
+    gameState.playerOrder.forEach(id => {
+        const hand = [gameState.deck.pop(), gameState.deck.pop()];
+        gameState.players[id].hand = hand;
+        gameState.players[id].roundBet = 0; // 重置
+        io.to(id).emit('yourHand', hand);
     });
+
+    // 扣盲注邏輯
+    gameState.players[p1].chips -= 10;
+    gameState.players[p1].roundBet = 10;
+    gameState.players[p2].chips -= 20;
+    gameState.players[p2].roundBet = 20;
+    gameState.pot = 30;
+
+    gameState.currentTurnIndex = (gameState.playerOrder.length > 2) ? 2 : 0;
+    
+    io.emit('updateStatus', { 
+        pot: gameState.pot, 
+        phase: gameState.phase, 
+        currentMaxBet: gameState.currentMaxBet // 記得傳這個，前端的「本輪最高注額」才會跳動
+    });
+    broadcastPlayerList(); // 封裝成函數減少重複代碼
+});
 
     socket.on('drawCard', () => {
         if (gameState.phase === 'deal' && gameState.players[socket.id].hand.length === 0) {
@@ -192,37 +217,49 @@ io.on('connection', (socket) => {
 
         const player = gameState.players[socket.id];
 
-        if (data.action === 'call') {
-            const diff = gameState.currentMaxBet - player.roundBet;
-            player.chips -= diff;
-            player.roundBet += diff;
-            gameState.pot += diff;
-            gameState.playersActed++; // 正常增加表態人數
-            io.emit('gameLog', `👤 ${player.name} 跟注 ${diff}`);
-
-        } else if (data.action === 'raise') {
-            const raiseAmount = parseInt(data.amount); // 玩家想加注到的總金額
-            if (raiseAmount > gameState.currentMaxBet) {
-                const diff = raiseAmount - player.roundBet;
+        switch(data.action) {
+            case 'check':
+                // 如果別人有下注，你不能 Check
+                if (player.roundBet < gameState.currentMaxBet) {
+                    socket.emit('gameLog', "❌ 有人加注，你必須跟注或蓋牌");
+                    return;
+                }
+                gameState.playersActed++;
+                io.emit('gameLog', `✅ ${player.name} 過牌`);
+                break;
+            
+            case 'call':
+                const diff = gameState.currentMaxBet - player.roundBet;
+                if (player.chips < diff) return; // 簡單餘額判斷
                 player.chips -= diff;
                 player.roundBet += diff;
                 gameState.pot += diff;
-                gameState.currentMaxBet = raiseAmount;
-                
-                // 關鍵：有人加注，重置已表態人數為 1 (即加注者本人)
-                // 這會強迫其他人必須再次表態
-                gameState.playersActed = 1; 
-                io.emit('gameLog', `🔥 ${player.name} 加注到 ${raiseAmount}`);
-            }
+                gameState.playersActed++;
+                io.emit('gameLog', `👤 ${player.name} 跟注 ${diff}`);
+                break;
 
-        } else if (data.action === 'check') {
-            gameState.playersActed++;
-            io.emit('gameLog', `✅ ${player.name} 過牌`);
-            
-        } else if (data.action === 'fold') {
-            player.hand = []; 
-            io.emit('gameLog', `❌ ${player.name} 蓋牌`);
-            // 蓋牌不增加 playersActed，因為 checkRoundOver 會重新計算 activePlayers
+            case 'raise':
+                const raiseTo = parseInt(data.amount);
+                // 規定：加注額必須大於目前最高注額，且玩家籌碼足夠
+                if (raiseTo > gameState.currentMaxBet) {
+                    const needed = raiseTo - player.roundBet;
+                    if (player.chips < needed) return socket.emit('gameLog', "❌ 籌碼不足");
+
+                    player.chips -= needed;
+                    player.roundBet = raiseTo;
+                    gameState.pot += needed;
+                    gameState.currentMaxBet = raiseTo;
+                    
+                    // 關鍵：除了加注者，其他人都必須重新表態
+                    gameState.playersActed = 1; 
+                    io.emit('gameLog', `🔥 ${player.name} 加注到 ${raiseTo}`);
+                }
+                break;
+
+            case 'fold':
+                player.hand = [];
+                io.emit('gameLog', `❌ ${player.name} 蓋牌`);
+                break;
         }
 
         // 檢查剩餘人數與回合狀態
@@ -244,7 +281,7 @@ io.on('connection', (socket) => {
     socket.on('nextPhase', () => {
         if (gameState.deck.length < 5) return;
         
-        if (gameState.phase === 'deal') {
+        if (gameState.phase === 'preflop') {
             gameState.communityCards.push(gameState.deck.pop(), gameState.deck.pop(), gameState.deck.pop());
             gameState.phase = 'flop';
         } else if (gameState.phase === 'flop') {
@@ -261,41 +298,62 @@ io.on('connection', (socket) => {
     });
 
     socket.on('showdown', () => {
+        // 1. 安全檢查：確保遊戲正在進行中
+        if (gameState.phase === 'waiting' || gameState.communityCards.length < 5) {
+            return socket.emit('gameLog', "❌ 尚未到攤牌階段");
+        }
+
         let allHands = [];
         let playerIds = [];
 
         for (let id in gameState.players) {
             const player = gameState.players[id];
-            if (player.hand.length === 2) {
-                const formatCard = (c) => {
-                    let v = c.value === '10' ? '10' : c.value;
-                    let s = { '♠': 's', '♥': 'h', '♦': 'd', '♣': 'c' }[c.suit];
-                    return v + s;
-                };
-                const fullSevenCards = [...player.hand.map(formatCard), ...gameState.communityCards.map(formatCard)];
-                allHands.push(Solver.solve(fullSevenCards));
-                playerIds.push(id);
+            // 確保玩家沒蓋牌 (hand.length === 2)
+            if (player.hand && player.hand.length === 2) {
+                const fullSevenCards = [
+                    ...player.hand.map(formatCardForSolver), 
+                    ...gameState.communityCards.map(formatCardForSolver)
+                ];
+                
+                // 解決 indexOf 問題：將 ID 存入 Hand 物件中
+                let solvedHand = Solver.solve(fullSevenCards);
+                solvedHand.playerId = id; // 自定義屬性標記這是誰的牌
+                
+                allHands.push(solvedHand);
             }
         }
 
         if (allHands.length > 0) {
             const winners = Solver.winners(allHands); 
-            // 找出所有贏家的 ID (可能不止一位)
-            let winnerIds = [];
-            winners.forEach(winHand => {
-                const idx = allHands.indexOf(winHand);
-                if (idx !== -1) winnerIds.push(playerIds[idx]);
+            
+            // 取得所有贏家的 ID
+            let winnerIds = winners.map(winHand => winHand.playerId);
+            
+            // 計算分錢 (處理平分底池)
+            const share = Math.floor(gameState.pot / winnerIds.length);
+            const handDescr = winners[0].descr; // 取得最強牌型名稱 (如 "Full House")
+
+            io.emit('gameLog', `⚖️ 判定結果：${handDescr}`);
+
+            winnerIds.forEach(wid => {
+                gameState.players[wid].chips += share;
+                io.emit('gameLog', `🎊 ${gameState.players[wid].name} 贏得 ${share} 籌碼！`);
             });
 
-            io.emit('gameLog', `⚖️ 判定結果：${winners[0].descr}`);
-            
-            // 分派籌碼：總獎金除以贏家數量
-            const share = Math.floor(gameState.pot / winnerIds.length);
-            winnerIds.forEach(wid => {
-                io.emit('declareWinner', wid, share); 
+            // 2. 徹底重置並同步狀態
+            gameState.pot = 0;
+            resetGame(); // 內含 phase = 'waiting'
+
+            // 3. 發送完整的狀態更新給所有人
+            io.emit('updateStatus', { pot: 0, phase: 'waiting', currentMaxBet: 0 });
+            io.emit('updateBoard', []); // 清空公牌畫面
+            io.emit('updatePlayerList', { 
+                players: gameState.players, 
+                currentTurn: null 
             });
         }
     });
+
     // 接收贏家判定並發放籌碼
     socket.on('declareWinner', (winnerId, amount) => {
         const winner = gameState.players[winnerId];
