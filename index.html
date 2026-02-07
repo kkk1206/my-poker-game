@@ -1,262 +1,508 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-TW">
 <head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>線上簡易撲克</title>
+    <title>德州撲克</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #2d5a27; color: white; }
-        .card-display { font-size: 50px; background: white; color: black; width: 100px; height: 140px; 
-                        margin: 20px auto; border-radius: 10px; line-height: 140px; }
-        .red { color: red; }
-        button { padding: 15px 30px; font-size: 18px; cursor: pointer; border-radius: 5px; border: none; }
-        #log { font-size: 12px; color: #ccc; margin-top: 20px; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px;
+        }
+
+        #app {
+            width: 100%;
+            max-width: 800px;
+        }
+
+        .screen {
+            display: none;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        .screen.active {
+            display: block;
+        }
+
+        h1 {
+            color: #1e3c72;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        button {
+            width: 100%;
+            padding: 15px;
+            background: #2a5298;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #1e3c72;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        #game-screen {
+            background: #0d5d0d;
+            color: white;
+        }
+
+        .poker-table {
+            background: #1a7a1a;
+            border-radius: 200px;
+            padding: 40px 20px;
+            margin: 20px 0;
+            border: 8px solid #8b4513;
+            position: relative;
+        }
+
+        .community-cards {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+            min-height: 100px;
+        }
+
+        .card {
+            width: 60px;
+            height: 85px;
+            background: white;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            font-weight: bold;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+
+        .card.red {
+            color: #e74c3c;
+        }
+
+        .card.black {
+            color: #2c3e50;
+        }
+
+        .card.back {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .players {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .player {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid transparent;
+        }
+
+        .player.active {
+            border-color: #ffd700;
+            background: rgba(255,215,0,0.2);
+        }
+
+        .player.current-user {
+            border-color: #4CAF50;
+        }
+
+        .player-name {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .player-chips {
+            color: #ffd700;
+        }
+
+        .player-cards {
+            display: flex;
+            gap: 5px;
+            margin-top: 10px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .actions button {
+            flex: 1;
+            min-width: 100px;
+        }
+
+        .pot-info {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #ffd700;
+            margin: 20px 0;
+        }
+
+        .bet-input {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .bet-input input {
+            flex: 1;
+        }
+
+        .status-message {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+
+        @media (max-width: 600px) {
+            .card {
+                width: 45px;
+                height: 65px;
+                font-size: 18px;
+            }
+            
+            .actions {
+                flex-direction: column;
+            }
+            
+            .actions button {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>♠️ 德州撲克連線桌 ♣️</h1>
-    
-    <div id="community-cards" style="margin-bottom: 20px;">
-        <h3>桌面公牌</h3>
-        <div id="board" style="display: flex; justify-content: center; gap: 10px; min-height: 80px;">
+    <div id="app">
+        <!-- 登入畫面 -->
+        <div id="login-screen" class="screen active">
+            <h1>🃏 德州撲克</h1>
+            <div class="input-group">
+                <label for="player-name">玩家名稱</label>
+                <input type="text" id="player-name" placeholder="輸入你的名稱">
             </div>
+            <div class="input-group">
+                <label for="room-id">房間 ID（選填，留空則建立新房間）</label>
+                <input type="text" id="room-id" placeholder="輸入房間 ID 或留空">
+            </div>
+            <button id="join-btn">加入遊戲</button>
+        </div>
+
+        <!-- 等待畫面 -->
+        <div id="lobby-screen" class="screen">
+            <h1>等待其他玩家</h1>
+            <div class="status-message">
+                <p>房間 ID: <strong id="current-room-id"></strong></p>
+                <p>已加入玩家數: <strong id="player-count">1</strong></p>
+                <p>分享房間 ID 給你的朋友！</p>
+            </div>
+            <div id="lobby-players"></div>
+            <button id="start-game-btn">開始遊戲（至少需要2人）</button>
+        </div>
+
+        <!-- 遊戲畫面 -->
+        <div id="game-screen" class="screen">
+            <h1>德州撲克</h1>
+            <div class="pot-info">
+                底池: $<span id="pot">0</span>
+            </div>
+            <div class="poker-table">
+                <div class="community-cards" id="community-cards">
+                    <!-- 公共牌 -->
+                </div>
+            </div>
+            <div class="status-message" id="game-status">
+                等待遊戲開始...
+            </div>
+            <div class="players" id="players">
+                <!-- 玩家資訊 -->
+            </div>
+            <div class="actions" id="actions">
+                <button id="fold-btn">棄牌 (Fold)</button>
+                <button id="check-btn">過牌 (Check)</button>
+                <button id="call-btn">跟注 (Call)</button>
+                <button id="raise-btn">加注 (Raise)</button>
+            </div>
+            <div class="bet-input">
+                <input type="number" id="raise-amount" placeholder="加注金額" min="0">
+                <button id="confirm-raise-btn">確認加注</button>
+            </div>
+        </div>
     </div>
-
-    <div id="my-hand">
-        <h3>你的手牌</h3>
-        <div id="card" class="card-display">?</div>
-    </div>
-
-    <div class="controls">
-        <button onclick="draw()">抽手牌</button>
-        <hr>
-        <p>管理員控制：</p>
-        <button onclick="start()">新局開始</button>
-        <button onclick="next()">發公牌</button>
-    </div>
-
-    <div id="log"></div>
-
-<div id="player-list" style="background: rgba(0,0,0,0.3); padding: 10px; margin: 10px auto; max-width: 500px; border-radius: 10px;">
-    <h4>在線玩家</h4>
-    <div id="players-container" style="display: flex; justify-content: space-around; flex-wrap: wrap;"></div>
-</div>
-
-<div id="game-status" style="font-size: 24px; color: #ffeb3b; margin: 10px;">
-    💰 總底池: <span id="pot-amount">0</span>
-</div>
-
-<div class="player-actions" style="margin: 20px; background: rgba(0,0,0,0.2); padding: 15px; border-radius: 10px;">
-    <button onclick="takeAction('check')" style="background: #4CAF50;">過牌 (Check)</button>
-    <button onclick="takeAction('call')" style="background: #2196F3;">跟注 (Call)</button>
-    <button onclick="takeAction('fold')" style="background: #f44336;">蓋牌 (Fold)</button>
-    
-    <div style="margin-top: 10px;">
-        <input type="number" id="raise-amount" placeholder="金額" style="width: 80px; padding: 10px;">
-        <button onclick="raiseBet()" style="background: #FF5722;">加注 (Raise)</button>
-    </div>
-</div>
-
-<div id="setup" style="margin: 10px;">
-    <input type="text" id="name-input" placeholder="輸入你的暱稱" style="padding: 10px;">
-    <button onclick="changeName()" style="padding: 10px; background: #FF9800;">更名</button>
-</div>
-
-<div style="margin-top: 30px; font-size: 14px; background: rgba(0,0,0,0.2); padding: 10px;">
-    <strong>牌型等級參考：</strong><br>
-    同花大順 > 同花順 > 四條 > 葫蘆 > 同花 > 順子 > 三條 > 兩對 > 對子 > 高牌
-</div>
-
-<div id="bet-info" style="font-size: 18px; color: #00e676;">
-    📢 本輪最高注額: <span id="max-bet">0</span>
-</div>
-
-<button onclick="autoShowdown()" style="background: #9c27b0;">🤖 自動判斷勝負</button>
-
-    <script src="/socket.io/socket.io.js"></script>
 
     <script>
-    function autoShowdown() {
-        if (confirm("確定要讓電腦判斷最強牌型嗎？")) {
-            socket.emit('showdown');
+        const WS_URL = 'ws://localhost:3000'; // 請改成你的 Render WebSocket URL
+        let ws = null;
+        let playerId = null;
+        let roomId = null;
+        let gameState = null;
+
+        // 畫面切換
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
         }
-    }
 
-    function changeName() {
-        const name = document.getElementById('name-input').value;
-        socket.emit('setName', name);
-    }
-    
-    // 監聽伺服器的贏家觸發
-    socket.on('triggerWinner', (winnerId) => {
-        socket.emit('declareWinner', winnerId);
-    });
-    </script>
+        // 連接 WebSocket
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
 
-    <script>
-        function raiseBet() {
-            const amt = document.getElementById('raise-amount').value;
-            if (!amt) return alert("請輸入加注金額");
-            socket.emit('playerAction', { action: 'raise', amount: amt });
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleMessage(message);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                alert('連線錯誤，請重新整理頁面');
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+            };
         }
-    </script>
 
-    <script>
-        const socket = io();
-        
-        function draw() {
-            socket.emit('drawCard');
+        // 處理訊息
+        function handleMessage(message) {
+            switch(message.type) {
+                case 'joined':
+                    playerId = message.playerId;
+                    roomId = message.roomId;
+                    document.getElementById('current-room-id').textContent = roomId;
+                    showScreen('lobby-screen');
+                    break;
+                case 'playerJoined':
+                    updateLobby(message.players);
+                    break;
+                case 'gameStarted':
+                    gameState = message.gameState;
+                    showScreen('game-screen');
+                    updateGame(gameState);
+                    break;
+                case 'gameUpdate':
+                    gameState = message.gameState;
+                    updateGame(gameState);
+                    break;
+                case 'error':
+                    alert(message.message);
+                    break;
+            }
         }
-        function start() { socket.emit('startGame'); }
-        function next() { socket.emit('nextPhase'); }
-        function takeAction(actionType) {
-        socket.emit('playerAction', { action: actionType });
-    }
 
+        // 更新大廳
+        function updateLobby(players) {
+            document.getElementById('player-count').textContent = players.length;
+            const lobbyPlayers = document.getElementById('lobby-players');
+            lobbyPlayers.innerHTML = players.map(p => 
+                `<div class="player"><div class="player-name">${p.name}</div></div>`
+            ).join('');
+            
+            const startBtn = document.getElementById('start-game-btn');
+            startBtn.disabled = players.length < 2;
+        }
 
-        socket.on('yourHand', (hand) => {
-    const handDiv = document.getElementById('my-hand');
-    // 找到或建立一個容器來放這兩張牌
-    let cardsArea = document.getElementById('cards-area');
-    if (!cardsArea) {
-        cardsArea = document.createElement('div');
-        cardsArea.id = 'cards-area';
-        cardsArea.style.display = 'flex';
-        cardsArea.style.justifyContent = 'center';
-        cardsArea.style.gap = '10px';
-        handDiv.appendChild(cardsArea);
-    }
-    
-    cardsArea.innerHTML = ''; // 清空舊手牌
-    hand.forEach(card => {
-        const c = document.createElement('div');
-        c.className = 'card-display ' + (card.suit === '♥' || card.suit === '♦' ? 'red' : '');
-        c.style.margin = "0"; // 覆蓋原本的 auto
-        c.innerText = card.value + card.suit;
-        cardsArea.appendChild(c);
-    });
-    document.getElementById('card').style.display = 'none'; // 隱藏原本的問號框
-});
+        // 更新遊戲畫面
+        function updateGame(state) {
+            // 更新底池
+            document.getElementById('pot').textContent = state.pot;
 
-    socket.on('gameLog', (msg) => {
-        const logDiv = document.getElementById('log');
-        logDiv.innerHTML += `<p>${msg}</p>`;
-        logDiv.scrollTop = logDiv.scrollHeight; // 自動捲到底部
-    });
+            // 更新公共牌
+            const communityCards = document.getElementById('community-cards');
+            communityCards.innerHTML = state.communityCards.map(card => 
+                renderCard(card)
+            ).join('');
 
-    // 更新玩家清單並標示「當前玩家」
-        socket.on('updatePlayerList', (data) => {
-            const container = document.getElementById('players-container');
-            container.innerHTML = '';
-            for (let id in data.players) {
-                const p = data.players[id];
-                const pDiv = document.createElement('div');
-                
-                // 關鍵：根據是否為當前玩家，加入對應的 class
-                pDiv.className = `player-card ${id === data.currentTurn ? 'active-turn' : ''}`;
-                
-                const isMe = id === socket.id ? " (你)" : "";
-                // 增加顯示手牌狀態 (蓋牌或有牌)
-                const status = p.hand.length === 0 && gameState.phase !== 'deal' ? " (已蓋牌)" : "";
-                
-                pDiv.innerHTML = `
-                    <div style="font-weight: bold;">👤 ${p.name}${isMe}</div>
-                    <div style="color: #ffeb3b;">💰 ${p.chips}</div>
-                    <div style="font-size: 14px; color: #00e676;">🪙 投入: ${p.roundBet}</div>
-                    <div style="font-size: 10px; color: #aaa;">${status}</div>
+            // 更新玩家
+            const playersDiv = document.getElementById('players');
+            playersDiv.innerHTML = state.players.map(player => {
+                const isCurrentUser = player.id === playerId;
+                const isActive = player.id === state.currentPlayer;
+                return `
+                    <div class="player ${isActive ? 'active' : ''} ${isCurrentUser ? 'current-user' : ''}">
+                        <div class="player-name">${player.name} ${isActive ? '⭐' : ''}</div>
+                        <div class="player-chips">籌碼: $${player.chips}</div>
+                        <div class="player-chips">當前注: $${player.currentBet}</div>
+                        ${player.folded ? '<div style="color: #ff6b6b;">已棄牌</div>' : ''}
+                        <div class="player-cards">
+                            ${isCurrentUser && player.cards ? 
+                                player.cards.map(card => renderCard(card)).join('') :
+                                (player.cards ? '<div class="card back">🂠</div><div class="card back">🂠</div>' : '')
+                            }
+                        </div>
+                    </div>
                 `;
-                container.appendChild(pDiv);
+            }).join('');
+
+            // 更新狀態訊息
+            const statusDiv = document.getElementById('game-status');
+            if (state.winner) {
+                statusDiv.textContent = `🎉 ${state.winner.name} 獲勝！贏得 $${state.pot}`;
+            } else {
+                const currentPlayerName = state.players.find(p => p.id === state.currentPlayer)?.name;
+                statusDiv.textContent = `輪到 ${currentPlayerName} 行動 | 當前階段: ${getStageText(state.stage)}`;
             }
 
-            const isMyTurn = (data.currentTurn === socket.id);
-            document.querySelectorAll('.player-actions button').forEach(btn => {
-                btn.disabled = !isMyTurn;
-                btn.style.opacity = isMyTurn ? "1" : "0.5";
-            });
-        });
+            // 更新按鈕狀態
+            updateButtons(state);
+        }
 
-        socket.on('updateStatus', (data) => {
-            document.getElementById('pot-amount').innerText = data.pot;
-            // 如果伺服器有回傳 currentMaxBet 也要更新
-            if(data.currentMaxBet !== undefined) {
-                document.getElementById('max-bet').innerText = data.currentMaxBet;
+        // 渲染撲克牌
+        function renderCard(card) {
+            const suitSymbols = { hearts: '♥', diamonds: '♦', clubs: '♣', spades: '♠' };
+            const isRed = card.suit === 'hearts' || card.suit === 'diamonds';
+            return `<div class="card ${isRed ? 'red' : 'black'}">
+                <div>${card.rank}</div>
+                <div>${suitSymbols[card.suit]}</div>
+            </div>`;
+        }
+
+        // 取得階段文字
+        function getStageText(stage) {
+            const stages = {
+                preflop: '翻牌前',
+                flop: '翻牌',
+                turn: '轉牌',
+                river: '河牌',
+                showdown: '攤牌'
+            };
+            return stages[stage] || stage;
+        }
+
+        // 更新按鈕
+        function updateButtons(state) {
+            const isMyTurn = state.currentPlayer === playerId;
+            const currentPlayer = state.players.find(p => p.id === playerId);
+            const maxBet = Math.max(...state.players.map(p => p.currentBet));
+            const canCheck = currentPlayer.currentBet === maxBet;
+
+            document.getElementById('fold-btn').disabled = !isMyTurn;
+            document.getElementById('check-btn').disabled = !isMyTurn || !canCheck;
+            document.getElementById('call-btn').disabled = !isMyTurn || canCheck;
+            document.getElementById('raise-btn').disabled = !isMyTurn;
+            document.getElementById('confirm-raise-btn').disabled = !isMyTurn;
+
+            if (!canCheck) {
+                const callAmount = maxBet - currentPlayer.currentBet;
+                document.getElementById('call-btn').textContent = `跟注 $${callAmount}`;
+            } else {
+                document.getElementById('call-btn').textContent = '跟注';
             }
-        });
+        }
 
-        // 在 startGame 時清空手牌畫面
-        socket.on('updateBoard', (cards) => {
-            const boardDiv = document.getElementById('board');
-            const cardQuestDiv = document.getElementById('card'); // 原本的 "?" 框
-            const cardsArea = document.getElementById('cards-area'); // 玩家手牌區域
+        // 發送訊息
+        function sendMessage(message) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(message));
+            }
+        }
 
-            // 1. 先清空桌面公牌區
-            boardDiv.innerHTML = ''; 
-
-            // 2. 如果傳入的是空陣列 (代表新局重置)
-            if (!cards || cards.length === 0) {
-                if (cardsArea) cardsArea.innerHTML = ''; // 清空手牌畫面
-                cardQuestDiv.style.display = 'block';    // 顯示問號框
-                cardQuestDiv.innerText = '?';
+        // 事件監聽
+        document.getElementById('join-btn').addEventListener('click', () => {
+            const name = document.getElementById('player-name').value.trim();
+            const room = document.getElementById('room-id').value.trim();
+            
+            if (!name) {
+                alert('請輸入玩家名稱');
                 return;
             }
 
-            // 3. 如果有公牌，隱藏問號框並渲染牌組
-            cardQuestDiv.style.display = 'none'; 
-            cards.forEach(card => {
-                const c = document.createElement('div');
-                // 判斷花色是否為紅色
-                const isRed = (card.suit === '♥' || card.suit === '♦') ? 'red' : '';
-                c.className = `card-display small ${isRed}`;
-                c.innerText = card.value + card.suit;
-                boardDiv.appendChild(c);
-            });
+            connectWebSocket();
+            setTimeout(() => {
+                sendMessage({
+                    type: 'join',
+                    playerName: name,
+                    roomId: room || undefined
+                });
+            }, 500);
+        });
+
+        document.getElementById('start-game-btn').addEventListener('click', () => {
+            sendMessage({ type: 'startGame', roomId });
+        });
+
+        document.getElementById('fold-btn').addEventListener('click', () => {
+            sendMessage({ type: 'action', action: 'fold', roomId });
+        });
+
+        document.getElementById('check-btn').addEventListener('click', () => {
+            sendMessage({ type: 'action', action: 'check', roomId });
+        });
+
+        document.getElementById('call-btn').addEventListener('click', () => {
+            sendMessage({ type: 'action', action: 'call', roomId });
+        });
+
+        document.getElementById('raise-btn').addEventListener('click', () => {
+            document.getElementById('raise-amount').focus();
+        });
+
+        document.getElementById('confirm-raise-btn').addEventListener('click', () => {
+            const amount = parseInt(document.getElementById('raise-amount').value);
+            if (amount > 0) {
+                sendMessage({ type: 'action', action: 'raise', amount, roomId });
+                document.getElementById('raise-amount').value = '';
+            }
         });
     </script>
-
-    <style>
-        /* 新增一些樣式讓公牌變小一點 */
-        .card-display.small {
-            width: 60px; height: 80px; font-size: 24px; line-height: 80px; margin: 0;
-        }
-
-        #players-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 15px;
-            padding: 15px;
-        }
-        .player-card {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            padding: 10px;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-        }
-
-        .active-turn {
-            border-color: #ffeb3b !important;
-            background: rgba(255, 235, 59, 0.15) !important;
-            box-shadow: 0 0 15px rgba(255, 235, 59, 0.5);
-        }
-
-        /* 針對手機觸控優化 */
-        button {
-            min-height: 50px; /* 增加點擊區域 */
-            margin: 5px;
-            touch-action: manipulation;
-        }
-
-        .player-actions {
-            display: grid;
-            grid-template-columns: 1fr 1fr; /* 兩兩並排，方便大拇指按 */
-            gap: 10px;
-        }
-
-        #my-hand .card-display {
-            width: 70px; /* 手機上牌縮小一點 */
-            height: 100px;
-            line-height: 100px;
-            font-size: 30px;
-        }
-    </style>
 </body>
 </html>
