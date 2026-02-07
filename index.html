@@ -287,7 +287,10 @@
     </div>
 
     <script>
-        const WS_URL = 'https://poker-0i0z.onrender.com'; // 請改成你的 Render WebSocket URL
+        // 自動偵測是否使用 HTTPS，並使用對應的 WebSocket 協議
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const WS_URL = `${protocol}//${window.location.host}`;
+        
         let ws = null;
         let playerId = null;
         let roomId = null;
@@ -386,7 +389,7 @@
                         <div class="player-cards">
                             ${isCurrentUser && player.cards ? 
                                 player.cards.map(card => renderCard(card)).join('') :
-                                (player.cards ? '<div class="card back">🂠</div><div class="card back">🂠</div>' : '')
+                                (player.cards && player.cards.length > 0 ? '<div class="card back">🂠</div><div class="card back">🂠</div>' : '')
                             }
                         </div>
                     </div>
@@ -432,6 +435,9 @@
         function updateButtons(state) {
             const isMyTurn = state.currentPlayer === playerId;
             const currentPlayer = state.players.find(p => p.id === playerId);
+            
+            if (!currentPlayer) return;
+            
             const maxBet = Math.max(...state.players.map(p => p.currentBet));
             const canCheck = currentPlayer.currentBet === maxBet;
 
@@ -481,15 +487,15 @@
         });
 
         document.getElementById('fold-btn').addEventListener('click', () => {
-            sendMessage({ type: 'action', action: 'fold', roomId });
+            sendMessage({ type: 'action', action: 'fold', roomId, playerId });
         });
 
         document.getElementById('check-btn').addEventListener('click', () => {
-            sendMessage({ type: 'action', action: 'check', roomId });
+            sendMessage({ type: 'action', action: 'check', roomId, playerId });
         });
 
         document.getElementById('call-btn').addEventListener('click', () => {
-            sendMessage({ type: 'action', action: 'call', roomId });
+            sendMessage({ type: 'action', action: 'call', roomId, playerId });
         });
 
         document.getElementById('raise-btn').addEventListener('click', () => {
@@ -499,7 +505,7 @@
         document.getElementById('confirm-raise-btn').addEventListener('click', () => {
             const amount = parseInt(document.getElementById('raise-amount').value);
             if (amount > 0) {
-                sendMessage({ type: 'action', action: 'raise', amount, roomId });
+                sendMessage({ type: 'action', action: 'raise', amount, roomId, playerId });
                 document.getElementById('raise-amount').value = '';
             }
         });

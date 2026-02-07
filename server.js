@@ -1,10 +1,19 @@
 const WebSocket = require('ws');
 const express = require('express');
 const http = require('http');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
+// 提供靜態檔案
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 確保所有路由都返回 index.html
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // 遊戲房間
 const rooms = new Map();
@@ -255,10 +264,12 @@ function broadcastGameState(gameState) {
             }))
         };
         
-        player.ws.send(JSON.stringify({
-            type: 'gameUpdate',
-            gameState: playerState
-        }));
+        if (player.ws.readyState === WebSocket.OPEN) {
+            player.ws.send(JSON.stringify({
+                type: 'gameUpdate',
+                gameState: playerState
+            }));
+        }
     });
 }
 
@@ -267,23 +278,34 @@ wss.on('connection', (ws) => {
     console.log('New client connected');
 
     ws.on('message', (message) => {
-        const data = JSON.parse(message);
+        try {
+            const data = JSON.parse(message);
 
-        switch (data.type) {
-            case 'join':
-                handleJoin(ws, data);
-                break;
-            case 'startGame':
-                handleStartGame(data.roomId);
-                break;
-            case 'action':
-                handlePlayerAction(data);
-                break;
+            switch (data.type) {
+                case 'join':
+                    handleJoin(ws, data);
+                    break;
+                case 'startGame':
+                    handleStartGame(data.roomId);
+                    break;
+                case 'action':
+                    handlePlayerAction(data);
+                    break;
+            }
+        } catch (error) {
+            console.error('Error handling message:', error);
         }
     });
 
     ws.on('close', () => {
         console.log('Client disconnected');
+        // 清理斷線的玩家
+        rooms.forEach((room, roomId) => {
+            room.players = room.players.filter(p => p.ws !== ws);
+            if (room.players.length === 0) {
+                rooms.delete(roomId);
+            }
+        });
     });
 });
 
@@ -321,10 +343,12 @@ function handleJoin(ws, data) {
 
     // 通知所有玩家
     room.players.forEach(p => {
-        p.ws.send(JSON.stringify({
-            type: 'playerJoined',
-            players: room.players.map(pl => ({ id: pl.id, name: pl.name }))
-        }));
+        if (p.ws.readyState === WebSocket.OPEN) {
+            p.ws.send(JSON.stringify({
+                type: 'playerJoined',
+                players: room.players.map(pl => ({ id: pl.id, name: pl.name }))
+            }));
+        }
     });
 }
 
@@ -344,10 +368,12 @@ function handleStartGame(roomId) {
     startNewRound(gameState);
 
     room.players.forEach(player => {
-        player.ws.send(JSON.stringify({
-            type: 'gameStarted',
-            gameState: gameState
-        }));
+        if (player.ws.readyState === WebSocket.OPEN) {
+            player.ws.send(JSON.stringify({
+                type: 'gameStarted',
+                gameState: gameState
+            }));
+        }
     });
 
     broadcastGameState(gameState);
@@ -362,7 +388,7 @@ function handlePlayerAction(data) {
     
     if (result.error) {
         const player = room.players.find(p => p.id === data.playerId);
-        if (player) {
+        if (player && player.ws.readyState === WebSocket.OPEN) {
             player.ws.send(JSON.stringify({
                 type: 'error',
                 message: result.error
@@ -373,9 +399,6 @@ function handlePlayerAction(data) {
 
     broadcastGameState(room.gameState);
 }
-
-// 靜態檔案
-app.use(express.static('public'));
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
