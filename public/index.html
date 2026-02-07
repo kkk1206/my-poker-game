@@ -279,9 +279,13 @@
                 <button id="call-btn">跟注 (Call)</button>
                 <button id="raise-btn">加注 (Raise)</button>
             </div>
-            <div class="bet-input">
+            <div class="bet-input" id="bet-input">
                 <input type="number" id="raise-amount" placeholder="加注金額" min="0">
                 <button id="confirm-raise-btn">確認加注</button>
+            </div>
+            <div id="confirm-result-container" style="display: none; margin-top: 20px;">
+                <button id="confirm-result-btn" style="background: #4CAF50;">確認結果並繼續下一局</button>
+                <p id="confirm-status" style="text-align: center; margin-top: 10px; color: #ffd700;"></p>
             </div>
         </div>
     </div>
@@ -366,8 +370,15 @@
 
         // 更新遊戲畫面
         function updateGame(state) {
-            // 更新底池
-            document.getElementById('pot').textContent = state.pot;
+            // 更新底池（包含邊池）
+            if (state.pots && state.pots.length > 0) {
+                const potDisplay = state.pots.map(pot => 
+                    `${pot.name}: $${pot.amount}`
+                ).join(' | ');
+                document.getElementById('pot').innerHTML = potDisplay;
+            } else {
+                document.getElementById('pot').textContent = state.pot;
+            }
 
             // 更新公共牌
             const communityCards = document.getElementById('community-cards');
@@ -381,9 +392,9 @@
                 const isCurrentUser = player.id === playerId;
                 const isActive = player.id === state.currentPlayer;
                 
-                // 檢查是否在 showdown 中
+                // 檢查是否在 showdown 中（只顯示未棄牌的玩家）
                 let handInfo = '';
-                if (state.showdownPlayers) {
+                if (state.showdownPlayers && !player.folded) {
                     const showdownInfo = state.showdownPlayers.find(sp => sp.id === player.id);
                     if (showdownInfo) {
                         handInfo = `<div style="color: #ffd700; font-size: 12px;">${getHandTypeName(showdownInfo.handRank.type)}</div>`;
@@ -394,7 +405,7 @@
                 let winInfo = '';
                 if (state.winners) {
                     const winnerInfo = state.winners.find(w => w.id === player.id);
-                    if (winnerInfo) {
+                    if (winnerInfo && winnerInfo.winAmount > 0) {
                         winInfo = `<div style="color: #4CAF50; font-weight: bold;">🏆 贏得 $${winnerInfo.winAmount}</div>`;
                     }
                 }
@@ -430,6 +441,23 @@
                 const currentPlayerName = state.players.find(p => p.id === state.currentPlayer)?.name;
                 const callAmount = state.maxBet - (state.players.find(p => p.id === playerId)?.currentBet || 0);
                 statusDiv.textContent = `輪到 ${currentPlayerName} 行動 | 當前階段: ${getStageText(state.stage)} | 跟注: $${callAmount}`;
+            }
+
+            // 顯示或隱藏確認按鈕
+            const confirmContainer = document.getElementById('confirm-result-container');
+            const confirmBtn = document.getElementById('confirm-result-btn');
+            const confirmStatus = document.getElementById('confirm-status');
+            
+            if (state.waitingForConfirm) {
+                confirmContainer.style.display = 'block';
+                confirmBtn.disabled = state.hasConfirmed;
+                confirmBtn.textContent = state.hasConfirmed ? '已確認 ✓' : '確認結果並繼續下一局';
+                
+                const confirmedCount = state.confirmedPlayers?.length || 0;
+                const totalPlayers = state.players.filter(p => p.chips > 0).length;
+                confirmStatus.textContent = `等待玩家確認 (${confirmedCount}/${totalPlayers})`;
+            } else {
+                confirmContainer.style.display = 'none';
             }
 
             // 更新按鈕狀態
@@ -475,24 +503,50 @@
             const canCheck = currentPlayer.currentBet === maxBet;
             const callAmount = maxBet - currentPlayer.currentBet;
 
-            document.getElementById('fold-btn').disabled = !isMyTurn;
-            document.getElementById('check-btn').disabled = !isMyTurn || !canCheck;
-            document.getElementById('call-btn').disabled = !isMyTurn || canCheck;
-            document.getElementById('raise-btn').disabled = !isMyTurn;
-            document.getElementById('confirm-raise-btn').disabled = !isMyTurn;
-
-            // 更新按鈕文字顯示跟注金額
-            if (canCheck) {
-                document.getElementById('call-btn').textContent = '跟注 (Call)';
-            } else {
-                document.getElementById('call-btn').textContent = `跟注 $${callAmount}`;
-            }
+            // 控制行動按鈕
+            const actionsDiv = document.getElementById('actions');
+            const betInputDiv = document.getElementById('bet-input');
             
-            // 設定最小加注金額提示
-            const raiseInput = document.getElementById('raise-amount');
-            if (state.lastRaiseAmount) {
-                raiseInput.placeholder = `加注金額 (最小 ${state.lastRaiseAmount})`;
-                raiseInput.min = state.lastRaiseAmount;
+            if (state.waitingForConfirm) {
+                // 遊戲結束等待確認，隱藏所有行動按鈕
+                actionsDiv.style.display = 'none';
+                betInputDiv.style.display = 'none';
+            } else {
+                actionsDiv.style.display = 'flex';
+                betInputDiv.style.display = 'flex';
+                
+                document.getElementById('fold-btn').disabled = !isMyTurn;
+                document.getElementById('check-btn').disabled = !isMyTurn || !canCheck;
+                document.getElementById('call-btn').disabled = !isMyTurn || canCheck;
+                document.getElementById('raise-btn').disabled = !isMyTurn;
+                document.getElementById('confirm-raise-btn').disabled = !isMyTurn;
+
+                // 更新按鈕文字顯示跟注金額
+                if (canCheck) {
+                    document.getElementById('call-btn').textContent = '跟注 (Call)';
+                } else {
+                    document.getElementById('call-btn').textContent = `跟注 $${callAmount}`;
+                }
+                
+                // 設定最小加注金額提示
+                const raiseInput = document.getElementById('raise-amount');
+                if (state.lastRaiseAmount) {
+                    raiseInput.placeholder = `加注金額 (最小 ${state.lastRaiseAmount})`;
+                    raiseInput.min = state.lastRaiseAmount;
+                }
+                
+                // 當輸入加注金額時顯示總共要下注多少
+                raiseInput.oninput = function() {
+                    const raiseAmount = parseInt(this.value) || 0;
+                    const totalBet = callAmount + raiseAmount;
+                    const confirmBtn = document.getElementById('confirm-raise-btn');
+                    
+                    if (raiseAmount > 0) {
+                        confirmBtn.textContent = `確認加注 (總注: $${totalBet})`;
+                    } else {
+                        confirmBtn.textContent = '確認加注';
+                    }
+                };
             }
         }
 
@@ -549,6 +603,10 @@
                 sendMessage({ type: 'action', action: 'raise', amount, roomId, playerId });
                 document.getElementById('raise-amount').value = '';
             }
+        });
+
+        document.getElementById('confirm-result-btn').addEventListener('click', () => {
+            sendMessage({ type: 'confirmResult', roomId, playerId });
         });
     </script>
 </body>

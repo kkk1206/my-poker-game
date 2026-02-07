@@ -523,6 +523,88 @@ function getCombinations(arr, k) {
     return combinations;
 }
 
+// 計算邊池
+function calculateSidePots(gameState) {
+    const players = gameState.players.filter(p => !p.folded);
+    
+    // 如果只有一個玩家，直接返回主池
+    if (players.length === 1) {
+        return [{
+            amount: gameState.pot,
+            eligiblePlayers: [players[0].id],
+            name: '主池'
+        }];
+    }
+    
+    const pots = [];
+    const playerBets = players.map(p => ({
+        id: p.id,
+        bet: p.currentBet,
+        folded: p.folded
+    })).sort((a, b) => a.bet - b.bet);
+    
+    let remainingPlayers = players.map(p => p.id);
+    let previousLevel = 0;
+    
+    for (let i = 0; i < playerBets.length; i++) {
+        const currentLevel = playerBets[i].bet;
+        
+        if (currentLevel > previousLevel && remainingPlayers.length > 0) {
+            const potAmount = (currentLevel - previousLevel) * remainingPlayers.length;
+            
+            if (potAmount > 0) {
+                pots.push({
+                    amount: potAmount,
+                    eligiblePlayers: [...remainingPlayers],
+                    name: pots.length === 0 ? '主池' : `邊池 ${pots.length}`
+                });
+            }
+            
+            previousLevel = currentLevel;
+        }
+        
+        // 移除達到這個級別的玩家（all-in 的玩家）
+        if (i < playerBets.length - 1 && playerBets[i].bet === playerBets[i + 1].bet) {
+            continue;
+        }
+        
+        // 找出所有在這個級別 all-in 的玩家
+        const allInAtThisLevel = playerBets.filter(pb => pb.bet === currentLevel).map(pb => pb.id);
+        remainingPlayers = remainingPlayers.filter(id => !allInAtThisLevel.includes(id));
+    }
+    
+    return pots;
+}
+
+// 處理玩家確認結果
+function handleConfirmResult(gameState, playerId) {
+    if (!gameState.waitingForConfirm) {
+        return { error: '遊戲未在等待確認狀態' };
+    }
+    
+    if (!gameState.confirmedPlayers.includes(playerId)) {
+        gameState.confirmedPlayers.push(playerId);
+    }
+    
+    // 檢查是否所有玩家都確認了
+    const activePlayers = gameState.players.filter(p => p.chips > 0);
+    if (gameState.confirmedPlayers.length >= activePlayers.length) {
+        // 所有玩家都確認了，開始新回合
+        gameState.players.forEach(p => delete p.winAmount);
+        delete gameState.winners;
+        delete gameState.showdownPlayers;
+        delete gameState.waitingForConfirm;
+        delete gameState.confirmedPlayers;
+        delete gameState.pots;
+        
+        if (startNewRound(gameState)) {
+            return { success: true, newRound: true };
+        }
+    }
+    
+    return { success: true, newRound: false };
+}
+
 // 獲取牌型名稱
 function getHandTypeName(type) {
     const names = ['高牌', '一對', '兩對', '三條', '順子', '同花', '葫蘆', '四條', '同花順', '皇家同花順'];
@@ -534,17 +616,33 @@ function endRound(gameState, winners, showdownPlayers = null) {
     // winners 可能是單一玩家或陣列
     const winnerArray = Array.isArray(winners) ? winners : [winners];
     
-    // 計算每個贏家分到的籌碼
-    const potShare = Math.floor(gameState.pot / winnerArray.length);
-    const remainder = gameState.pot % winnerArray.length;
+    // 計算邊池
+    const pots = calculateSidePots(gameState);
     
-    winnerArray.forEach((winner, idx) => {
-        const share = potShare + (idx === 0 ? remainder : 0);
-        winner.chips += share;
-        winner.winAmount = share;
+    // 分配每個底池給對應的贏家
+    winnerArray.forEach(winner => {
+        winner.winAmount = 0;
     });
     
-    // 在 showdown 階段，顯示所有未棄牌玩家的手牌
+    pots.forEach(pot => {
+        // 找出這個底池的有效玩家中的贏家
+        const eligibleWinners = winnerArray.filter(w => 
+            pot.eligiblePlayers.includes(w.id)
+        );
+        
+        if (eligibleWinners.length > 0) {
+            const share = Math.floor(pot.amount / eligibleWinners.length);
+            const remainder = pot.amount % eligibleWinners.length;
+            
+            eligibleWinners.forEach((winner, idx) => {
+                const winAmount = share + (idx === 0 ? remainder : 0);
+                winner.chips += winAmount;
+                winner.winAmount = (winner.winAmount || 0) + winAmount;
+            });
+        }
+    });
+    
+    // 在 showdown 階段，只顯示未棄牌玩家的手牌
     if (showdownPlayers && showdownPlayers.length > 1) {
         gameState.showdownPlayers = showdownPlayers.map(p => ({
             id: p.id,
@@ -560,16 +658,9 @@ function endRound(gameState, winners, showdownPlayers = null) {
         winAmount: w.winAmount
     }));
     
-    setTimeout(() => {
-        // 清理獲勝資訊
-        gameState.players.forEach(p => delete p.winAmount);
-        delete gameState.winners;
-        delete gameState.showdownPlayers;
-        
-        if (startNewRound(gameState)) {
-            broadcastGameState(gameState);
-        }
-    }, 8000);
+    gameState.pots = pots;
+    gameState.waitingForConfirm = true;
+    gameState.confirmedPlayers = [];
 }
 
 // 廣播遊戲狀態
@@ -586,13 +677,17 @@ function broadcastGameState(gameState) {
             maxBet: maxBet,
             players: gameState.players.map(p => ({
                 ...p,
-                // 在 showdown 顯示所有未棄牌玩家的牌，否則只顯示自己的牌
-                cards: (gameState.showdownPlayers || p.id === player.id) ? p.cards : 
+                // 在 showdown 只顯示未棄牌玩家的牌，否則只顯示自己的牌
+                cards: (gameState.showdownPlayers && !p.folded) || p.id === player.id ? p.cards : 
                        (p.cards && p.cards.length > 0 ? [{}, {}] : [])
             })),
-            // 傳送 showdown 資訊
+            // 傳送 showdown 資訊（只包含未棄牌的玩家）
             showdownPlayers: gameState.showdownPlayers,
-            winners: gameState.winners
+            winners: gameState.winners,
+            pots: gameState.pots,
+            waitingForConfirm: gameState.waitingForConfirm,
+            confirmedPlayers: gameState.confirmedPlayers,
+            hasConfirmed: gameState.confirmedPlayers?.includes(player.id)
         };
         
         if (player.ws.readyState === WebSocket.OPEN) {
@@ -621,6 +716,9 @@ wss.on('connection', (ws) => {
                     break;
                 case 'action':
                     handlePlayerAction(data);
+                    break;
+                case 'confirmResult':
+                    handlePlayerConfirmResult(data);
                     break;
             }
         } catch (error) {
@@ -720,6 +818,27 @@ function handlePlayerAction(data) {
     if (!room || !room.gameState) return;
 
     const result = handleAction(room.gameState, data.playerId, data.action, data.amount);
+    
+    if (result.error) {
+        const player = room.players.find(p => p.id === data.playerId);
+        if (player && player.ws.readyState === WebSocket.OPEN) {
+            player.ws.send(JSON.stringify({
+                type: 'error',
+                message: result.error
+            }));
+        }
+        return;
+    }
+
+    broadcastGameState(room.gameState);
+}
+
+// 處理玩家確認結果
+function handlePlayerConfirmResult(data) {
+    const room = rooms.get(data.roomId);
+    if (!room || !room.gameState) return;
+
+    const result = handleConfirmResult(room.gameState, data.playerId);
     
     if (result.error) {
         const player = room.players.find(p => p.id === data.playerId);
