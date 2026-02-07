@@ -67,21 +67,26 @@ function shuffleDeck(deck) {
 // 建立遊戲狀態
 function createGameState(players) {
     return {
-        players: players.map(p => ({
+        players: players.map((p, idx) => ({
             ...p,
             cards: [],
             chips: 1000,
             currentBet: 0,
-            folded: false
+            folded: false,
+            hasActed: false,
+            position: idx
         })),
         deck: createDeck(),
         communityCards: [],
         pot: 0,
+        sidePots: [],
         currentPlayerIdx: 0,
         stage: 'preflop',
         dealerIdx: 0,
         smallBlind: 10,
-        bigBlind: 20
+        bigBlind: 20,
+        lastRaiseAmount: 20,
+        roundActions: 0
     };
 }
 
@@ -108,7 +113,8 @@ function startNewRound(gameState) {
         ...p,
         cards: [],
         currentBet: 0,
-        folded: false
+        folded: false,
+        hasActed: false
     }));
 
     if (gameState.players.length < 2) {
@@ -119,9 +125,11 @@ function startNewRound(gameState) {
     gameState.deck = createDeck();
     gameState.communityCards = [];
     gameState.pot = 0;
+    gameState.sidePots = [];
     gameState.stage = 'preflop';
     gameState.dealerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
-    gameState.currentPlayerIdx = (gameState.dealerIdx + 3) % gameState.players.length;
+    gameState.lastRaiseAmount = gameState.bigBlind;
+    gameState.roundActions = 0;
 
     // 發牌
     dealCards(gameState);
@@ -137,6 +145,12 @@ function startNewRound(gameState) {
     gameState.players[bigBlindIdx].currentBet = gameState.bigBlind;
     gameState.players[bigBlindIdx].chips -= gameState.bigBlind;
     gameState.pot += gameState.bigBlind;
+    
+    // 翻牌前大盲還沒行動
+    gameState.players[bigBlindIdx].hasActed = false;
+
+    // 從大盲後一位開始
+    gameState.currentPlayerIdx = (gameState.dealerIdx + 3) % gameState.players.length;
 
     return true;
 }
@@ -153,34 +167,79 @@ function handleAction(gameState, playerId, action, amount = 0) {
     }
 
     const player = gameState.players[playerIdx];
+    if (player.folded) {
+        return { error: '你已經棄牌' };
+    }
+
     const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
 
     switch (action) {
         case 'fold':
             player.folded = true;
+            player.hasActed = true;
             break;
+            
         case 'check':
             if (player.currentBet < maxBet) {
                 return { error: '無法過牌，需要跟注或棄牌' };
             }
+            player.hasActed = true;
             break;
+            
         case 'call':
             const callAmount = maxBet - player.currentBet;
+            if (callAmount === 0) {
+                return { error: '請使用過牌' };
+            }
             const actualCall = Math.min(callAmount, player.chips);
             player.currentBet += actualCall;
             player.chips -= actualCall;
             gameState.pot += actualCall;
+            player.hasActed = true;
+            
+            // 如果 all-in
+            if (player.chips === 0 && actualCall < callAmount) {
+                console.log(`${player.name} all-in with ${actualCall}`);
+            }
             break;
+            
         case 'raise':
-            const raiseAmount = amount || gameState.bigBlind;
-            const totalBet = maxBet + raiseAmount;
-            const betNeeded = totalBet - player.currentBet;
-            const actualRaise = Math.min(betNeeded, player.chips);
+            if (amount <= 0) {
+                return { error: '加注金額必須大於 0' };
+            }
+            
+            // 計算總共要下注的金額
+            const currentBetNeeded = maxBet - player.currentBet;
+            const totalRaise = currentBetNeeded + amount;
+            
+            // 最小加注金額檢查（至少要是上次加注的兩倍）
+            if (amount < gameState.lastRaiseAmount) {
+                return { error: `最小加注金額為 ${gameState.lastRaiseAmount}` };
+            }
+            
+            const actualRaise = Math.min(totalRaise, player.chips);
+            const previousBet = player.currentBet;
+            
             player.currentBet += actualRaise;
             player.chips -= actualRaise;
             gameState.pot += actualRaise;
+            player.hasActed = true;
+            
+            // 更新最後加注金額
+            gameState.lastRaiseAmount = amount;
+            
+            // 所有其他玩家需要重新行動
+            gameState.players.forEach((p, idx) => {
+                if (idx !== playerIdx && !p.folded) {
+                    p.hasActed = false;
+                }
+            });
+            
+            console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}`);
             break;
     }
+
+    gameState.roundActions++;
 
     // 移到下一個玩家
     moveToNextPlayer(gameState);
@@ -208,11 +267,30 @@ function moveToNextPlayer(gameState) {
 
 // 檢查回合是否完成
 function isRoundComplete(gameState) {
-    const activePlayers = gameState.players.filter(p => !p.folded);
-    if (activePlayers.length === 1) return true;
+    const activePlayers = gameState.players.filter(p => !p.folded && p.chips > 0);
+    
+    // 只剩一個玩家
+    if (activePlayers.length === 1) {
+        return true;
+    }
+    
+    // 所有玩家都 all-in
+    const playersWithChips = gameState.players.filter(p => !p.folded && p.chips > 0);
+    if (playersWithChips.length <= 1) {
+        return true;
+    }
 
     const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
-    return activePlayers.every(p => p.currentBet === maxBet || p.chips === 0);
+    
+    // 檢查所有未棄牌的玩家：
+    // 1. 下注金額等於最大下注 (或 all-in)
+    // 2. 已經行動過
+    const allPlayersReady = activePlayers.every(p => {
+        const betMatches = p.currentBet === maxBet || p.chips === 0;
+        return betMatches && p.hasActed;
+    });
+    
+    return allPlayersReady;
 }
 
 // 進入下一階段
@@ -224,7 +302,14 @@ function advanceStage(gameState) {
         return;
     }
 
-    gameState.players.forEach(p => p.currentBet = 0);
+    // 重置每個玩家的下注和行動狀態
+    gameState.players.forEach(p => {
+        p.currentBet = 0;
+        p.hasActed = false;
+    });
+    
+    gameState.roundActions = 0;
+    gameState.lastRaiseAmount = gameState.bigBlind;
 
     switch (gameState.stage) {
         case 'preflop':
@@ -242,32 +327,249 @@ function advanceStage(gameState) {
         case 'river':
             gameState.stage = 'showdown';
             const winner = determineWinner(gameState);
-            endRound(gameState, winner);
+            endRound(gameState, winner, activePlayers);
             return;
     }
 
+    // 從莊家後第一位開始
     gameState.currentPlayerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
-    while (gameState.players[gameState.currentPlayerIdx].folded) {
+    while (gameState.players[gameState.currentPlayerIdx].folded || gameState.players[gameState.currentPlayerIdx].chips === 0) {
         gameState.currentPlayerIdx = (gameState.currentPlayerIdx + 1) % gameState.players.length;
     }
 }
 
-// 決定贏家（簡化版）
+// 決定贏家（完整版牌型判斷）
 function determineWinner(gameState) {
     const activePlayers = gameState.players.filter(p => !p.folded);
-    return activePlayers[0]; // 簡化版：返回第一個未棄牌的玩家
+    
+    if (activePlayers.length === 1) {
+        return activePlayers[0];
+    }
+    
+    // 評估每個玩家的手牌
+    const playerHands = activePlayers.map(player => ({
+        player,
+        handRank: evaluateHand(player.cards, gameState.communityCards)
+    }));
+    
+    // 排序（最強的在前）
+    playerHands.sort((a, b) => compareHands(b.handRank, a.handRank));
+    
+    // 找出所有同樣強度的玩家（平手）
+    const winningRank = playerHands[0].handRank;
+    const winners = playerHands.filter(ph => compareHands(ph.handRank, winningRank) === 0);
+    
+    if (winners.length === 1) {
+        return winners[0].player;
+    }
+    
+    // 平手 - 返回所有贏家
+    return winners.map(w => w.player);
+}
+
+// 評估手牌強度
+function evaluateHand(holeCards, communityCards) {
+    const allCards = [...holeCards, ...communityCards];
+    const cards = allCards.map(c => ({
+        rank: getRankValue(c.rank),
+        suit: c.suit,
+        rankStr: c.rank
+    }));
+    
+    // 生成所有可能的 5 張牌組合
+    const combinations = getCombinations(cards, 5);
+    let bestHand = null;
+    
+    for (const combo of combinations) {
+        const hand = evaluateFiveCards(combo);
+        if (!bestHand || compareHands(hand, bestHand) > 0) {
+            bestHand = hand;
+        }
+    }
+    
+    return bestHand;
+}
+
+// 評估 5 張牌
+function evaluateFiveCards(cards) {
+    const sorted = cards.sort((a, b) => b.rank - a.rank);
+    const ranks = sorted.map(c => c.rank);
+    const suits = sorted.map(c => c.suit);
+    
+    const isFlush = suits.every(s => s === suits[0]);
+    const isStraight = checkStraight(ranks);
+    const rankCounts = {};
+    
+    ranks.forEach(r => {
+        rankCounts[r] = (rankCounts[r] || 0) + 1;
+    });
+    
+    const counts = Object.values(rankCounts).sort((a, b) => b - a);
+    const uniqueRanks = Object.keys(rankCounts).map(Number).sort((a, b) => b - a);
+    
+    // 皇家同花順
+    if (isFlush && isStraight && ranks[0] === 14) {
+        return { type: 9, ranks, tiebreaker: ranks };
+    }
+    
+    // 同花順
+    if (isFlush && isStraight) {
+        return { type: 8, ranks, tiebreaker: ranks };
+    }
+    
+    // 四條
+    if (counts[0] === 4) {
+        const quad = uniqueRanks.find(r => rankCounts[r] === 4);
+        const kicker = uniqueRanks.find(r => rankCounts[r] === 1);
+        return { type: 7, ranks, tiebreaker: [quad, kicker] };
+    }
+    
+    // 葫蘆
+    if (counts[0] === 3 && counts[1] === 2) {
+        const trip = uniqueRanks.find(r => rankCounts[r] === 3);
+        const pair = uniqueRanks.find(r => rankCounts[r] === 2);
+        return { type: 6, ranks, tiebreaker: [trip, pair] };
+    }
+    
+    // 同花
+    if (isFlush) {
+        return { type: 5, ranks, tiebreaker: ranks };
+    }
+    
+    // 順子
+    if (isStraight) {
+        return { type: 4, ranks, tiebreaker: ranks };
+    }
+    
+    // 三條
+    if (counts[0] === 3) {
+        const trip = uniqueRanks.find(r => rankCounts[r] === 3);
+        const kickers = uniqueRanks.filter(r => rankCounts[r] === 1).sort((a, b) => b - a);
+        return { type: 3, ranks, tiebreaker: [trip, ...kickers] };
+    }
+    
+    // 兩對
+    if (counts[0] === 2 && counts[1] === 2) {
+        const pairs = uniqueRanks.filter(r => rankCounts[r] === 2).sort((a, b) => b - a);
+        const kicker = uniqueRanks.find(r => rankCounts[r] === 1);
+        return { type: 2, ranks, tiebreaker: [...pairs, kicker] };
+    }
+    
+    // 一對
+    if (counts[0] === 2) {
+        const pair = uniqueRanks.find(r => rankCounts[r] === 2);
+        const kickers = uniqueRanks.filter(r => rankCounts[r] === 1).sort((a, b) => b - a);
+        return { type: 1, ranks, tiebreaker: [pair, ...kickers] };
+    }
+    
+    // 高牌
+    return { type: 0, ranks, tiebreaker: ranks };
+}
+
+// 檢查順子
+function checkStraight(ranks) {
+    const uniqueRanks = [...new Set(ranks)].sort((a, b) => b - a);
+    if (uniqueRanks.length < 5) return false;
+    
+    // 一般順子
+    for (let i = 0; i < uniqueRanks.length - 4; i++) {
+        if (uniqueRanks[i] - uniqueRanks[i + 4] === 4) {
+            return true;
+        }
+    }
+    
+    // A-2-3-4-5 (輪子)
+    if (uniqueRanks.includes(14) && uniqueRanks.includes(5) && 
+        uniqueRanks.includes(4) && uniqueRanks.includes(3) && uniqueRanks.includes(2)) {
+        return true;
+    }
+    
+    return false;
+}
+
+// 比較兩手牌
+function compareHands(hand1, hand2) {
+    if (hand1.type !== hand2.type) {
+        return hand1.type - hand2.type;
+    }
+    
+    // 同類型，比較 tiebreaker
+    for (let i = 0; i < Math.min(hand1.tiebreaker.length, hand2.tiebreaker.length); i++) {
+        if (hand1.tiebreaker[i] !== hand2.tiebreaker[i]) {
+            return hand1.tiebreaker[i] - hand2.tiebreaker[i];
+        }
+    }
+    
+    return 0; // 完全平手
+}
+
+// 獲取牌面值
+function getRankValue(rank) {
+    const values = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
+    return values[rank];
+}
+
+// 生成組合
+function getCombinations(arr, k) {
+    if (k === 1) return arr.map(item => [item]);
+    const combinations = [];
+    for (let i = 0; i < arr.length - k + 1; i++) {
+        const head = arr[i];
+        const tailCombinations = getCombinations(arr.slice(i + 1), k - 1);
+        tailCombinations.forEach(tail => {
+            combinations.push([head, ...tail]);
+        });
+    }
+    return combinations;
+}
+
+// 獲取牌型名稱
+function getHandTypeName(type) {
+    const names = ['高牌', '一對', '兩對', '三條', '順子', '同花', '葫蘆', '四條', '同花順', '皇家同花順'];
+    return names[type] || '未知';
 }
 
 // 結束回合
-function endRound(gameState, winner) {
-    winner.chips += gameState.pot;
-    gameState.winner = winner;
+function endRound(gameState, winners, showdownPlayers = null) {
+    // winners 可能是單一玩家或陣列
+    const winnerArray = Array.isArray(winners) ? winners : [winners];
+    
+    // 計算每個贏家分到的籌碼
+    const potShare = Math.floor(gameState.pot / winnerArray.length);
+    const remainder = gameState.pot % winnerArray.length;
+    
+    winnerArray.forEach((winner, idx) => {
+        const share = potShare + (idx === 0 ? remainder : 0);
+        winner.chips += share;
+        winner.winAmount = share;
+    });
+    
+    // 在 showdown 階段，顯示所有未棄牌玩家的手牌
+    if (showdownPlayers && showdownPlayers.length > 1) {
+        gameState.showdownPlayers = showdownPlayers.map(p => ({
+            id: p.id,
+            name: p.name,
+            cards: p.cards,
+            handRank: evaluateHand(p.cards, gameState.communityCards)
+        }));
+    }
+    
+    gameState.winners = winnerArray.map(w => ({
+        id: w.id,
+        name: w.name,
+        winAmount: w.winAmount
+    }));
     
     setTimeout(() => {
-        delete gameState.winner;
-        startNewRound(gameState);
-        broadcastGameState(gameState);
-    }, 5000);
+        // 清理獲勝資訊
+        gameState.players.forEach(p => delete p.winAmount);
+        delete gameState.winners;
+        delete gameState.showdownPlayers;
+        
+        if (startNewRound(gameState)) {
+            broadcastGameState(gameState);
+        }
+    }, 8000);
 }
 
 // 廣播遊戲狀態
@@ -275,14 +577,22 @@ function broadcastGameState(gameState) {
     const room = Array.from(rooms.values()).find(r => r.gameState === gameState);
     if (!room) return;
 
+    const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
+
     room.players.forEach(player => {
         const playerState = {
             ...gameState,
             currentPlayer: gameState.players[gameState.currentPlayerIdx]?.id,
+            maxBet: maxBet,
             players: gameState.players.map(p => ({
                 ...p,
-                cards: p.id === player.id ? p.cards : (p.cards.length > 0 ? [{}, {}] : [])
-            }))
+                // 在 showdown 顯示所有未棄牌玩家的牌，否則只顯示自己的牌
+                cards: (gameState.showdownPlayers || p.id === player.id) ? p.cards : 
+                       (p.cards && p.cards.length > 0 ? [{}, {}] : [])
+            })),
+            // 傳送 showdown 資訊
+            showdownPlayers: gameState.showdownPlayers,
+            winners: gameState.winners
         };
         
         if (player.ws.readyState === WebSocket.OPEN) {

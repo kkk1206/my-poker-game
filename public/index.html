@@ -380,14 +380,35 @@
             playersDiv.innerHTML = state.players.map(player => {
                 const isCurrentUser = player.id === playerId;
                 const isActive = player.id === state.currentPlayer;
+                
+                // 檢查是否在 showdown 中
+                let handInfo = '';
+                if (state.showdownPlayers) {
+                    const showdownInfo = state.showdownPlayers.find(sp => sp.id === player.id);
+                    if (showdownInfo) {
+                        handInfo = `<div style="color: #ffd700; font-size: 12px;">${getHandTypeName(showdownInfo.handRank.type)}</div>`;
+                    }
+                }
+                
+                // 顯示獲勝資訊
+                let winInfo = '';
+                if (state.winners) {
+                    const winnerInfo = state.winners.find(w => w.id === player.id);
+                    if (winnerInfo) {
+                        winInfo = `<div style="color: #4CAF50; font-weight: bold;">🏆 贏得 $${winnerInfo.winAmount}</div>`;
+                    }
+                }
+                
                 return `
                     <div class="player ${isActive ? 'active' : ''} ${isCurrentUser ? 'current-user' : ''}">
                         <div class="player-name">${player.name} ${isActive ? '⭐' : ''}</div>
                         <div class="player-chips">籌碼: $${player.chips}</div>
                         <div class="player-chips">當前注: $${player.currentBet}</div>
                         ${player.folded ? '<div style="color: #ff6b6b;">已棄牌</div>' : ''}
+                        ${handInfo}
+                        ${winInfo}
                         <div class="player-cards">
-                            ${isCurrentUser && player.cards ? 
+                            ${player.cards && player.cards.length > 0 && player.cards[0].rank ? 
                                 player.cards.map(card => renderCard(card)).join('') :
                                 (player.cards && player.cards.length > 0 ? '<div class="card back">🂠</div><div class="card back">🂠</div>' : '')
                             }
@@ -398,15 +419,27 @@
 
             // 更新狀態訊息
             const statusDiv = document.getElementById('game-status');
-            if (state.winner) {
-                statusDiv.textContent = `🎉 ${state.winner.name} 獲勝！贏得 $${state.pot}`;
+            if (state.winners) {
+                if (state.winners.length === 1) {
+                    statusDiv.textContent = `🎉 ${state.winners[0].name} 獲勝！贏得 $${state.winners[0].winAmount}`;
+                } else {
+                    const winnerNames = state.winners.map(w => w.name).join(', ');
+                    statusDiv.textContent = `🎉 平手！${winnerNames} 平分底池`;
+                }
             } else {
                 const currentPlayerName = state.players.find(p => p.id === state.currentPlayer)?.name;
-                statusDiv.textContent = `輪到 ${currentPlayerName} 行動 | 當前階段: ${getStageText(state.stage)}`;
+                const callAmount = state.maxBet - (state.players.find(p => p.id === playerId)?.currentBet || 0);
+                statusDiv.textContent = `輪到 ${currentPlayerName} 行動 | 當前階段: ${getStageText(state.stage)} | 跟注: $${callAmount}`;
             }
 
             // 更新按鈕狀態
             updateButtons(state);
+        }
+        
+        // 取得手牌類型名稱（前端版本）
+        function getHandTypeName(type) {
+            const names = ['高牌', '一對', '兩對', '三條', '順子', '同花', '葫蘆', '四條', '同花順', '皇家同花順'];
+            return names[type] || '未知';
         }
 
         // 渲染撲克牌
@@ -438,8 +471,9 @@
             
             if (!currentPlayer) return;
             
-            const maxBet = Math.max(...state.players.map(p => p.currentBet));
+            const maxBet = state.maxBet || Math.max(...state.players.map(p => p.currentBet));
             const canCheck = currentPlayer.currentBet === maxBet;
+            const callAmount = maxBet - currentPlayer.currentBet;
 
             document.getElementById('fold-btn').disabled = !isMyTurn;
             document.getElementById('check-btn').disabled = !isMyTurn || !canCheck;
@@ -447,11 +481,18 @@
             document.getElementById('raise-btn').disabled = !isMyTurn;
             document.getElementById('confirm-raise-btn').disabled = !isMyTurn;
 
-            if (!canCheck) {
-                const callAmount = maxBet - currentPlayer.currentBet;
-                document.getElementById('call-btn').textContent = `跟注 $${callAmount}`;
+            // 更新按鈕文字顯示跟注金額
+            if (canCheck) {
+                document.getElementById('call-btn').textContent = '跟注 (Call)';
             } else {
-                document.getElementById('call-btn').textContent = '跟注';
+                document.getElementById('call-btn').textContent = `跟注 $${callAmount}`;
+            }
+            
+            // 設定最小加注金額提示
+            const raiseInput = document.getElementById('raise-amount');
+            if (state.lastRaiseAmount) {
+                raiseInput.placeholder = `加注金額 (最小 ${state.lastRaiseAmount})`;
+                raiseInput.min = state.lastRaiseAmount;
             }
         }
 
