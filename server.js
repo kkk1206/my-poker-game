@@ -10,8 +10,8 @@ const wss = new WebSocket.Server({ server });
 // 提供靜態檔案
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 確保所有路由都返回 index.html
-app.get('*', (req, res) => {
+// 主路由返回 index.html
+app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
