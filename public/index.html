@@ -195,12 +195,31 @@
 
         .bet-input {
             display: flex;
+            flex-direction: column;
             gap: 10px;
             margin-top: 10px;
+            padding: 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
         }
 
-        .bet-input input {
-            flex: 1;
+        .bet-input input[type="range"] {
+            width: 100%;
+        }
+
+        .bet-amount-display {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #ffd700;
+            margin: 10px 0;
+        }
+
+        .bet-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: #fff;
         }
 
         .status-message {
@@ -280,7 +299,17 @@
                 <button id="raise-btn">加注 (Raise)</button>
             </div>
             <div class="bet-input" id="bet-input">
-                <input type="number" id="raise-amount" placeholder="加注金額" min="0">
+                <div class="bet-info">
+                    <span>最小加注: <span id="min-raise">20</span></span>
+                    <span>你的籌碼: <span id="your-chips">1000</span></span>
+                </div>
+                <div class="bet-amount-display">
+                    加注金額: $<span id="raise-display">20</span>
+                </div>
+                <input type="range" id="raise-slider" min="20" max="1000" value="20" step="10">
+                <div class="bet-info">
+                    <span>總下注: $<span id="total-bet-display">20</span></span>
+                </div>
                 <button id="confirm-raise-btn">確認加注</button>
             </div>
             <div id="confirm-result-container" style="display: none; margin-top: 20px;">
@@ -528,24 +557,29 @@
                     document.getElementById('call-btn').textContent = `跟注 $${callAmount}`;
                 }
                 
-                // 設定最小加注金額提示
-                const raiseInput = document.getElementById('raise-amount');
-                if (state.lastRaiseAmount) {
-                    raiseInput.placeholder = `加注金額 (最小 ${state.lastRaiseAmount})`;
-                    raiseInput.min = state.lastRaiseAmount;
-                }
+                // 設定滑桿範圍
+                const raiseSlider = document.getElementById('raise-slider');
+                const minRaise = state.lastRaiseAmount || state.bigBlind || 20;
+                const maxRaise = currentPlayer.chips;
                 
-                // 當輸入加注金額時顯示總共要下注多少
-                raiseInput.oninput = function() {
-                    const raiseAmount = parseInt(this.value) || 0;
+                raiseSlider.min = minRaise;
+                raiseSlider.max = maxRaise;
+                raiseSlider.value = minRaise;
+                raiseSlider.step = Math.max(10, Math.floor(minRaise / 10) * 10);
+                
+                // 更新顯示
+                document.getElementById('min-raise').textContent = minRaise;
+                document.getElementById('your-chips').textContent = currentPlayer.chips;
+                document.getElementById('raise-display').textContent = minRaise;
+                document.getElementById('total-bet-display').textContent = callAmount + minRaise;
+                
+                // 滑桿事件
+                raiseSlider.oninput = function() {
+                    const raiseAmount = parseInt(this.value);
                     const totalBet = callAmount + raiseAmount;
-                    const confirmBtn = document.getElementById('confirm-raise-btn');
                     
-                    if (raiseAmount > 0) {
-                        confirmBtn.textContent = `確認加注 (總注: $${totalBet})`;
-                    } else {
-                        confirmBtn.textContent = '確認加注';
-                    }
+                    document.getElementById('raise-display').textContent = raiseAmount;
+                    document.getElementById('total-bet-display').textContent = totalBet;
                 };
             }
         }
@@ -594,14 +628,13 @@
         });
 
         document.getElementById('raise-btn').addEventListener('click', () => {
-            document.getElementById('raise-amount').focus();
+            document.getElementById('raise-slider').focus();
         });
 
         document.getElementById('confirm-raise-btn').addEventListener('click', () => {
-            const amount = parseInt(document.getElementById('raise-amount').value);
+            const amount = parseInt(document.getElementById('raise-slider').value);
             if (amount > 0) {
                 sendMessage({ type: 'action', action: 'raise', amount, roomId, playerId });
-                document.getElementById('raise-amount').value = '';
             }
         });
 

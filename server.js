@@ -113,6 +113,7 @@ function startNewRound(gameState) {
         ...p,
         cards: [],
         currentBet: 0,
+        totalBet: 0,
         folded: false,
         hasActed: false
     }));
@@ -140,10 +141,12 @@ function startNewRound(gameState) {
     
     gameState.players[smallBlindIdx].currentBet = gameState.smallBlind;
     gameState.players[smallBlindIdx].chips -= gameState.smallBlind;
+    gameState.players[smallBlindIdx].totalBet = gameState.smallBlind;
     gameState.pot += gameState.smallBlind;
 
     gameState.players[bigBlindIdx].currentBet = gameState.bigBlind;
     gameState.players[bigBlindIdx].chips -= gameState.bigBlind;
+    gameState.players[bigBlindIdx].totalBet = gameState.bigBlind;
     gameState.pot += gameState.bigBlind;
     
     // 翻牌前大盲還沒行動
@@ -197,6 +200,9 @@ function handleAction(gameState, playerId, action, amount = 0) {
             gameState.pot += actualCall;
             player.hasActed = true;
             
+            // 追蹤總投入
+            player.totalBet = (player.totalBet || 0) + actualCall;
+            
             // 如果 all-in
             if (player.chips === 0 && actualCall < callAmount) {
                 console.log(`${player.name} all-in with ${actualCall}`);
@@ -225,6 +231,9 @@ function handleAction(gameState, playerId, action, amount = 0) {
             gameState.pot += actualRaise;
             player.hasActed = true;
             
+            // 追蹤總投入
+            player.totalBet = (player.totalBet || 0) + actualRaise;
+            
             // 更新最後加注金額
             gameState.lastRaiseAmount = amount;
             
@@ -235,7 +244,7 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 }
             });
             
-            console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}`);
+            console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}, total invested: ${player.totalBet}`);
             break;
     }
 
@@ -302,10 +311,11 @@ function advanceStage(gameState) {
         return;
     }
 
-    // 重置每個玩家的下注和行動狀態
+    // 重置每個玩家的當前下注，但保留總投入
     gameState.players.forEach(p => {
         p.currentBet = 0;
         p.hasActed = false;
+        // totalBet 保留不重置
     });
     
     gameState.roundActions = 0;
@@ -536,42 +546,46 @@ function calculateSidePots(gameState) {
         }];
     }
     
+    // 收集所有玩家的總投入（包含之前的 currentBet）
+    const playerBets = players.map(p => {
+        // 計算這位玩家在整局中總共投入的金額
+        const totalInvested = p.totalBet || p.currentBet;
+        return {
+            id: p.id,
+            name: p.name,
+            bet: totalInvested,
+            folded: p.folded
+        };
+    }).sort((a, b) => a.bet - b.bet);
+    
     const pots = [];
-    const playerBets = players.map(p => ({
-        id: p.id,
-        bet: p.currentBet,
-        folded: p.folded
-    })).sort((a, b) => a.bet - b.bet);
-    
-    let remainingPlayers = players.map(p => p.id);
     let previousLevel = 0;
+    let remainingPlayers = [...players.map(p => p.id)];
     
-    for (let i = 0; i < playerBets.length; i++) {
-        const currentLevel = playerBets[i].bet;
+    // 為每個不同的下注級別建立底池
+    const uniqueBetLevels = [...new Set(playerBets.map(pb => pb.bet))].sort((a, b) => a - b);
+    
+    uniqueBetLevels.forEach((level, idx) => {
+        if (remainingPlayers.length === 0) return;
         
-        if (currentLevel > previousLevel && remainingPlayers.length > 0) {
-            const potAmount = (currentLevel - previousLevel) * remainingPlayers.length;
-            
-            if (potAmount > 0) {
-                pots.push({
-                    amount: potAmount,
-                    eligiblePlayers: [...remainingPlayers],
-                    name: pots.length === 0 ? '主池' : `邊池 ${pots.length}`
-                });
-            }
-            
-            previousLevel = currentLevel;
+        const potAmount = (level - previousLevel) * remainingPlayers.length;
+        
+        if (potAmount > 0) {
+            pots.push({
+                amount: potAmount,
+                eligiblePlayers: [...remainingPlayers],
+                name: idx === 0 ? '主池' : `邊池 ${idx}`
+            });
         }
         
-        // 移除達到這個級別的玩家（all-in 的玩家）
-        if (i < playerBets.length - 1 && playerBets[i].bet === playerBets[i + 1].bet) {
-            continue;
-        }
+        // 移除在這個級別 all-in 的玩家
+        const playersAtThisLevel = playerBets
+            .filter(pb => pb.bet === level)
+            .map(pb => pb.id);
         
-        // 找出所有在這個級別 all-in 的玩家
-        const allInAtThisLevel = playerBets.filter(pb => pb.bet === currentLevel).map(pb => pb.id);
-        remainingPlayers = remainingPlayers.filter(id => !allInAtThisLevel.includes(id));
-    }
+        remainingPlayers = remainingPlayers.filter(id => !playersAtThisLevel.includes(id));
+        previousLevel = level;
+    });
     
     return pots;
 }
