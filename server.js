@@ -135,9 +135,22 @@ function startNewRound(gameState) {
     // 發牌
     dealCards(gameState);
 
-    // 盲注
-    const smallBlindIdx = (gameState.dealerIdx + 1) % gameState.players.length;
-    const bigBlindIdx = (gameState.dealerIdx + 2) % gameState.players.length;
+    // 盲注位置
+    let smallBlindIdx, bigBlindIdx, firstToActIdx;
+    
+    if (gameState.players.length === 2) {
+        // 兩人桌：莊家是小盲，另一位是大盲
+        smallBlindIdx = gameState.dealerIdx;
+        bigBlindIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+        // 翻牌前小盲先行動
+        firstToActIdx = smallBlindIdx;
+    } else {
+        // 三人以上：莊家後第一位是小盲，第二位是大盲
+        smallBlindIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+        bigBlindIdx = (gameState.dealerIdx + 2) % gameState.players.length;
+        // 翻牌前大盲後第一位先行動
+        firstToActIdx = (gameState.dealerIdx + 3) % gameState.players.length;
+    }
     
     gameState.players[smallBlindIdx].currentBet = gameState.smallBlind;
     gameState.players[smallBlindIdx].chips -= gameState.smallBlind;
@@ -149,11 +162,13 @@ function startNewRound(gameState) {
     gameState.players[bigBlindIdx].totalBet = gameState.bigBlind;
     gameState.pot += gameState.bigBlind;
     
-    // 翻牌前大盲還沒行動
+    // 小盲在兩人桌已經行動（下盲注），但大盲還沒行動
+    if (gameState.players.length === 2) {
+        gameState.players[smallBlindIdx].hasActed = false;
+    }
     gameState.players[bigBlindIdx].hasActed = false;
 
-    // 從大盲後一位開始
-    gameState.currentPlayerIdx = (gameState.dealerIdx + 3) % gameState.players.length;
+    gameState.currentPlayerIdx = firstToActIdx;
 
     return true;
 }
@@ -214,37 +229,58 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 return { error: '加注金額必須大於 0' };
             }
             
-            // 計算總共要下注的金額
+            // 計算需要跟注的金額
             const currentBetNeeded = maxBet - player.currentBet;
-            const totalRaise = currentBetNeeded + amount;
             
-            // 最小加注金額檢查（至少要是上次加注的兩倍）
-            if (amount < gameState.lastRaiseAmount) {
-                return { error: `最小加注金額為 ${gameState.lastRaiseAmount}` };
+            // 檢查玩家是否有足夠的籌碼
+            if (player.chips < currentBetNeeded + amount) {
+                // 如果籌碼不足以完成加注，檢查是否是 all-in
+                if (player.chips > currentBetNeeded) {
+                    // 可以 all-in，但金額不足最小加注
+                    const allInAmount = player.chips;
+                    const actualRaiseAmount = allInAmount - currentBetNeeded;
+                    
+                    // All-in 時允許任何金額
+                    player.currentBet += allInAmount;
+                    player.chips = 0;
+                    gameState.pot += allInAmount;
+                    player.hasActed = true;
+                    player.totalBet = (player.totalBet || 0) + allInAmount;
+                    
+                    console.log(`${player.name} all-in raised ${actualRaiseAmount}`);
+                } else {
+                    return { error: '籌碼不足' };
+                }
+            } else {
+                // 最小加注金額檢查
+                // 上次加注的增量
+                const lastRaiseIncrement = gameState.lastRaiseAmount;
+                
+                if (amount < lastRaiseIncrement) {
+                    return { error: `最小加注金額為 ${lastRaiseIncrement}` };
+                }
+                
+                const totalRaise = currentBetNeeded + amount;
+                
+                player.currentBet += totalRaise;
+                player.chips -= totalRaise;
+                gameState.pot += totalRaise;
+                player.hasActed = true;
+                player.totalBet = (player.totalBet || 0) + totalRaise;
+                
+                // 更新最後加注增量（這次加注的增量）
+                gameState.lastRaiseAmount = amount;
+                
+                console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}, total invested: ${player.totalBet}`);
             }
-            
-            const actualRaise = Math.min(totalRaise, player.chips);
-            const previousBet = player.currentBet;
-            
-            player.currentBet += actualRaise;
-            player.chips -= actualRaise;
-            gameState.pot += actualRaise;
-            player.hasActed = true;
-            
-            // 追蹤總投入
-            player.totalBet = (player.totalBet || 0) + actualRaise;
-            
-            // 更新最後加注金額
-            gameState.lastRaiseAmount = amount;
             
             // 所有其他玩家需要重新行動
             gameState.players.forEach((p, idx) => {
-                if (idx !== playerIdx && !p.folded) {
+                if (idx !== playerIdx && !p.folded && p.chips > 0) {
                     p.hasActed = false;
                 }
             });
             
-            console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}, total invested: ${player.totalBet}`);
             break;
     }
 
@@ -266,7 +302,8 @@ function moveToNextPlayer(gameState) {
     let nextPlayer = (gameState.currentPlayerIdx + 1) % gameState.players.length;
     let count = 0;
     
-    while (gameState.players[nextPlayer].folded && count < gameState.players.length) {
+    // 跳過已棄牌的玩家和已經 all-in（沒籌碼）的玩家
+    while ((gameState.players[nextPlayer].folded || gameState.players[nextPlayer].chips === 0) && count < gameState.players.length) {
         nextPlayer = (nextPlayer + 1) % gameState.players.length;
         count++;
     }
@@ -276,26 +313,29 @@ function moveToNextPlayer(gameState) {
 
 // 檢查回合是否完成
 function isRoundComplete(gameState) {
-    const activePlayers = gameState.players.filter(p => !p.folded && p.chips > 0);
+    // 未棄牌的玩家
+    const activePlayers = gameState.players.filter(p => !p.folded);
     
-    // 只剩一個玩家
+    // 只剩一個玩家（其他都棄牌）
     if (activePlayers.length === 1) {
         return true;
     }
     
-    // 所有玩家都 all-in
-    const playersWithChips = gameState.players.filter(p => !p.folded && p.chips > 0);
+    // 還能行動的玩家（未棄牌且有籌碼）
+    const playersWithChips = activePlayers.filter(p => p.chips > 0);
+    
+    // 所有還能行動的玩家都 all-in 了（只剩 0 或 1 個玩家有籌碼）
     if (playersWithChips.length <= 1) {
         return true;
     }
 
     const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
     
-    // 檢查所有未棄牌的玩家：
-    // 1. 下注金額等於最大下注 (或 all-in)
+    // 檢查所有還能行動的玩家：
+    // 1. 下注金額等於最大下注
     // 2. 已經行動過
-    const allPlayersReady = activePlayers.every(p => {
-        const betMatches = p.currentBet === maxBet || p.chips === 0;
+    const allPlayersReady = playersWithChips.every(p => {
+        const betMatches = p.currentBet === maxBet;
         return betMatches && p.hasActed;
     });
     
@@ -306,6 +346,7 @@ function isRoundComplete(gameState) {
 function advanceStage(gameState) {
     const activePlayers = gameState.players.filter(p => !p.folded);
     
+    // 只剩一個玩家，直接結算
     if (activePlayers.length === 1) {
         endRound(gameState, activePlayers[0]);
         return;
@@ -341,10 +382,28 @@ function advanceStage(gameState) {
             return;
     }
 
-    // 從莊家後第一位開始
-    gameState.currentPlayerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
-    while (gameState.players[gameState.currentPlayerIdx].folded || gameState.players[gameState.currentPlayerIdx].chips === 0) {
-        gameState.currentPlayerIdx = (gameState.currentPlayerIdx + 1) % gameState.players.length;
+    // 從莊家後第一位有籌碼的玩家開始
+    let startIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+    let foundPlayer = false;
+    let attempts = 0;
+    
+    while (!foundPlayer && attempts < gameState.players.length) {
+        const player = gameState.players[startIdx];
+        if (!player.folded && player.chips > 0) {
+            gameState.currentPlayerIdx = startIdx;
+            foundPlayer = true;
+        } else {
+            startIdx = (startIdx + 1) % gameState.players.length;
+            attempts++;
+        }
+    }
+    
+    // 如果沒有找到有籌碼的玩家（全部 all-in），直接發完所有牌
+    if (!foundPlayer) {
+        // 繼續發牌直到 river
+        while (gameState.stage !== 'showdown') {
+            advanceStage(gameState);
+        }
     }
 }
 
@@ -535,59 +594,70 @@ function getCombinations(arr, k) {
 
 // 計算邊池
 function calculateSidePots(gameState) {
-    const players = gameState.players.filter(p => !p.folded);
+    const allPlayers = gameState.players.filter(p => !p.folded);
     
-    // 如果只有一個玩家，直接返回主池
-    if (players.length === 1) {
+    // 如果只有一個玩家（其他都棄牌），返回主池
+    if (allPlayers.length === 1) {
         return [{
             amount: gameState.pot,
-            eligiblePlayers: [players[0].id],
+            eligiblePlayers: [allPlayers[0].id],
             name: '主池'
         }];
     }
     
-    // 收集所有玩家的總投入（包含之前的 currentBet）
-    const playerBets = players.map(p => {
-        // 計算這位玩家在整局中總共投入的金額
-        const totalInvested = p.totalBet || p.currentBet;
-        return {
-            id: p.id,
-            name: p.name,
-            bet: totalInvested,
-            folded: p.folded
-        };
-    }).sort((a, b) => a.bet - b.bet);
+    // 收集每個玩家的總投入金額，並按金額排序
+    const playerContributions = allPlayers.map(p => ({
+        id: p.id,
+        name: p.name,
+        totalBet: p.totalBet || 0,
+        folded: p.folded
+    })).sort((a, b) => a.totalBet - b.totalBet);
+    
+    // 如果沒有人下注，返回空底池
+    if (playerContributions.every(p => p.totalBet === 0)) {
+        return [{
+            amount: 0,
+            eligiblePlayers: allPlayers.map(p => p.id),
+            name: '主池'
+        }];
+    }
     
     const pots = [];
     let previousLevel = 0;
-    let remainingPlayers = [...players.map(p => p.id)];
+    let remainingPlayers = [...allPlayers.map(p => p.id)];
     
-    // 為每個不同的下注級別建立底池
-    const uniqueBetLevels = [...new Set(playerBets.map(pb => pb.bet))].sort((a, b) => a - b);
+    // 找出所有不同的投入級別
+    const levels = [...new Set(playerContributions.map(p => p.totalBet))].sort((a, b) => a - b);
     
-    uniqueBetLevels.forEach((level, idx) => {
-        if (remainingPlayers.length === 0) return;
-        
-        const potAmount = (level - previousLevel) * remainingPlayers.length;
-        
-        if (potAmount > 0) {
-            pots.push({
-                amount: potAmount,
-                eligiblePlayers: [...remainingPlayers],
-                name: idx === 0 ? '主池' : `邊池 ${idx}`
-            });
+    levels.forEach((level, idx) => {
+        if (level > previousLevel && remainingPlayers.length > 0) {
+            // 計算這個級別的底池金額
+            const contribution = level - previousLevel;
+            const potAmount = contribution * remainingPlayers.length;
+            
+            if (potAmount > 0) {
+                pots.push({
+                    amount: potAmount,
+                    eligiblePlayers: [...remainingPlayers],
+                    name: idx === 0 ? '主池' : `邊池 ${idx}`
+                });
+            }
         }
         
-        // 移除在這個級別 all-in 的玩家
-        const playersAtThisLevel = playerBets
-            .filter(pb => pb.bet === level)
-            .map(pb => pb.id);
+        // 移除在這個級別投入全部的玩家
+        const playersAtThisLevel = playerContributions
+            .filter(p => p.totalBet === level)
+            .map(p => p.id);
         
         remainingPlayers = remainingPlayers.filter(id => !playersAtThisLevel.includes(id));
         previousLevel = level;
     });
     
-    return pots;
+    return pots.length > 0 ? pots : [{
+        amount: gameState.pot,
+        eligiblePlayers: allPlayers.map(p => p.id),
+        name: '主池'
+    }];
 }
 
 // 處理玩家確認結果
