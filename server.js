@@ -86,7 +86,9 @@ function createGameState(players) {
         smallBlind: 10,
         bigBlind: 20,
         lastRaiseAmount: 20,
-        roundActions: 0
+        roundActions: 0,
+        actionLog: [], // 遊戲日誌
+        handNumber: 0
     };
 }
 
@@ -121,6 +123,15 @@ function startNewRound(gameState) {
     if (gameState.players.length < 2) {
         return false;
     }
+
+    // 增加手數並重置日誌
+    gameState.handNumber = (gameState.handNumber || 0) + 1;
+    gameState.actionLog = [];
+    gameState.actionLog.push({
+        action: 'NEW_HAND',
+        handNumber: gameState.handNumber,
+        players: gameState.players.map(p => ({ name: p.name, chips: p.chips }))
+    });
 
     // 重置遊戲狀態
     gameState.deck = createDeck();
@@ -162,10 +173,15 @@ function startNewRound(gameState) {
     gameState.players[bigBlindIdx].totalBet = gameState.bigBlind;
     gameState.pot += gameState.bigBlind;
     
-    // 小盲在兩人桌已經行動（下盲注），但大盲還沒行動
-    if (gameState.players.length === 2) {
-        gameState.players[smallBlindIdx].hasActed = false;
-    }
+    // 記錄盲注
+    gameState.actionLog.push({
+        action: 'BLINDS',
+        smallBlind: { player: gameState.players[smallBlindIdx].name, amount: gameState.smallBlind },
+        bigBlind: { player: gameState.players[bigBlindIdx].name, amount: gameState.bigBlind }
+    });
+    
+    // 小盲和大盲在翻牌前都還沒真正行動
+    gameState.players[smallBlindIdx].hasActed = false;
     gameState.players[bigBlindIdx].hasActed = false;
 
     gameState.currentPlayerIdx = firstToActIdx;
@@ -188,6 +204,10 @@ function handleAction(gameState, playerId, action, amount = 0) {
     if (player.folded) {
         return { error: '你已經棄牌' };
     }
+    
+    if (player.chips === 0) {
+        return { error: '你已經 all-in，無法再行動' };
+    }
 
     const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
 
@@ -209,6 +229,10 @@ function handleAction(gameState, playerId, action, amount = 0) {
             if (callAmount === 0) {
                 return { error: '請使用過牌' };
             }
+            if (callAmount < 0) {
+                return { error: '下注邏輯錯誤' };
+            }
+            
             const actualCall = Math.min(callAmount, player.chips);
             player.currentBet += actualCall;
             player.chips -= actualCall;
@@ -220,7 +244,7 @@ function handleAction(gameState, playerId, action, amount = 0) {
             
             // 如果 all-in
             if (player.chips === 0 && actualCall < callAmount) {
-                console.log(`${player.name} all-in with ${actualCall}`);
+                console.log(`${player.name} all-in (call) with ${actualCall}`);
             }
             break;
             
@@ -233,27 +257,37 @@ function handleAction(gameState, playerId, action, amount = 0) {
             const currentBetNeeded = maxBet - player.currentBet;
             
             // 檢查玩家是否有足夠的籌碼
+            if (player.chips <= currentBetNeeded) {
+                return { error: '籌碼不足以加注，請選擇跟注或 all-in' };
+            }
+            
             if (player.chips < currentBetNeeded + amount) {
-                // 如果籌碼不足以完成加注，檢查是否是 all-in
-                if (player.chips > currentBetNeeded) {
-                    // 可以 all-in，但金額不足最小加注
-                    const allInAmount = player.chips;
-                    const actualRaiseAmount = allInAmount - currentBetNeeded;
-                    
-                    // All-in 時允許任何金額
-                    player.currentBet += allInAmount;
-                    player.chips = 0;
-                    gameState.pot += allInAmount;
-                    player.hasActed = true;
-                    player.totalBet = (player.totalBet || 0) + allInAmount;
-                    
-                    console.log(`${player.name} all-in raised ${actualRaiseAmount}`);
-                } else {
-                    return { error: '籌碼不足' };
+                // All-in 的情況
+                const allInAmount = player.chips;
+                const actualRaiseAmount = allInAmount - currentBetNeeded;
+                
+                // 檢查 all-in 金額是否至少等於最小加注（如果有足夠籌碼的話）
+                const lastRaiseIncrement = gameState.lastRaiseAmount;
+                
+                // All-in 時允許任何金額（即使小於最小加注）
+                player.currentBet += allInAmount;
+                player.chips = 0;
+                gameState.pot += allInAmount;
+                player.hasActed = true;
+                player.totalBet = (player.totalBet || 0) + allInAmount;
+                
+                // 如果 all-in 金額大於等於最小加注，其他玩家需要重新行動
+                if (actualRaiseAmount >= lastRaiseIncrement) {
+                    gameState.players.forEach((p, idx) => {
+                        if (idx !== playerIdx && !p.folded && p.chips > 0) {
+                            p.hasActed = false;
+                        }
+                    });
                 }
+                
+                console.log(`${player.name} all-in raised ${actualRaiseAmount}`);
             } else {
-                // 最小加注金額檢查
-                // 上次加注的增量
+                // 正常加注
                 const lastRaiseIncrement = gameState.lastRaiseAmount;
                 
                 if (amount < lastRaiseIncrement) {
@@ -271,17 +305,20 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 // 更新最後加注增量（這次加注的增量）
                 gameState.lastRaiseAmount = amount;
                 
+                // 所有其他玩家需要重新行動
+                gameState.players.forEach((p, idx) => {
+                    if (idx !== playerIdx && !p.folded && p.chips > 0) {
+                        p.hasActed = false;
+                    }
+                });
+                
                 console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}, total invested: ${player.totalBet}`);
             }
             
-            // 所有其他玩家需要重新行動
-            gameState.players.forEach((p, idx) => {
-                if (idx !== playerIdx && !p.folded && p.chips > 0) {
-                    p.hasActed = false;
-                }
-            });
-            
             break;
+            
+        default:
+            return { error: '無效的行動' };
     }
 
     gameState.roundActions++;
@@ -362,6 +399,37 @@ function advanceStage(gameState) {
     gameState.roundActions = 0;
     gameState.lastRaiseAmount = gameState.bigBlind;
 
+    // 檢查是否還有玩家能行動
+    const playersWithChips = activePlayers.filter(p => p.chips > 0);
+    const allPlayersAllIn = playersWithChips.length <= 1;
+
+    // 如果所有人都 all-in，直接發完所有牌到 showdown
+    if (allPlayersAllIn) {
+        // 發完剩餘的牌
+        while (gameState.stage !== 'river') {
+            switch (gameState.stage) {
+                case 'preflop':
+                    dealCommunityCards(gameState, 3);
+                    gameState.stage = 'flop';
+                    break;
+                case 'flop':
+                    dealCommunityCards(gameState, 1);
+                    gameState.stage = 'turn';
+                    break;
+                case 'turn':
+                    dealCommunityCards(gameState, 1);
+                    gameState.stage = 'river';
+                    break;
+            }
+        }
+        // 進入 showdown
+        gameState.stage = 'showdown';
+        const winner = determineWinner(gameState);
+        endRound(gameState, winner, activePlayers);
+        return;
+    }
+
+    // 正常進入下一階段
     switch (gameState.stage) {
         case 'preflop':
             dealCommunityCards(gameState, 3);
@@ -395,14 +463,6 @@ function advanceStage(gameState) {
         } else {
             startIdx = (startIdx + 1) % gameState.players.length;
             attempts++;
-        }
-    }
-    
-    // 如果沒有找到有籌碼的玩家（全部 all-in），直接發完所有牌
-    if (!foundPlayer) {
-        // 繼續發牌直到 river
-        while (gameState.stage !== 'showdown') {
-            advanceStage(gameState);
         }
     }
 }
@@ -466,7 +526,10 @@ function evaluateFiveCards(cards) {
     const suits = sorted.map(c => c.suit);
     
     const isFlush = suits.every(s => s === suits[0]);
-    const isStraight = checkStraight(ranks);
+    const straightInfo = checkStraight(ranks);
+    const isStraight = straightInfo.isStraight;
+    const straightHighCard = straightInfo.highCard;
+    
     const rankCounts = {};
     
     ranks.forEach(r => {
@@ -476,14 +539,14 @@ function evaluateFiveCards(cards) {
     const counts = Object.values(rankCounts).sort((a, b) => b - a);
     const uniqueRanks = Object.keys(rankCounts).map(Number).sort((a, b) => b - a);
     
-    // 皇家同花順
-    if (isFlush && isStraight && ranks[0] === 14) {
-        return { type: 9, ranks, tiebreaker: ranks };
+    // 皇家同花順（A-K-Q-J-10 同花）
+    if (isFlush && isStraight && straightHighCard === 14 && ranks.includes(13)) {
+        return { type: 9, ranks, tiebreaker: [14] };
     }
     
     // 同花順
     if (isFlush && isStraight) {
-        return { type: 8, ranks, tiebreaker: ranks };
+        return { type: 8, ranks, tiebreaker: [straightHighCard] };
     }
     
     // 四條
@@ -507,7 +570,7 @@ function evaluateFiveCards(cards) {
     
     // 順子
     if (isStraight) {
-        return { type: 4, ranks, tiebreaker: ranks };
+        return { type: 4, ranks, tiebreaker: [straightHighCard] };
     }
     
     // 三條
@@ -535,25 +598,25 @@ function evaluateFiveCards(cards) {
     return { type: 0, ranks, tiebreaker: ranks };
 }
 
-// 檢查順子
+// 檢查順子，返回是否為順子及最高牌
 function checkStraight(ranks) {
     const uniqueRanks = [...new Set(ranks)].sort((a, b) => b - a);
-    if (uniqueRanks.length < 5) return false;
+    if (uniqueRanks.length < 5) return { isStraight: false, highCard: 0 };
     
     // 一般順子
     for (let i = 0; i < uniqueRanks.length - 4; i++) {
         if (uniqueRanks[i] - uniqueRanks[i + 4] === 4) {
-            return true;
+            return { isStraight: true, highCard: uniqueRanks[i] };
         }
     }
     
-    // A-2-3-4-5 (輪子)
+    // A-2-3-4-5 (輪子) - 最高牌是 5
     if (uniqueRanks.includes(14) && uniqueRanks.includes(5) && 
         uniqueRanks.includes(4) && uniqueRanks.includes(3) && uniqueRanks.includes(2)) {
-        return true;
+        return { isStraight: true, highCard: 5 };
     }
     
-    return false;
+    return { isStraight: false, highCard: 0 };
 }
 
 // 比較兩手牌
@@ -703,7 +766,7 @@ function endRound(gameState, winners, showdownPlayers = null) {
     // 計算邊池
     const pots = calculateSidePots(gameState);
     
-    // 分配每個底池給對應的贏家
+    // 初始化贏家的獲勝金額
     winnerArray.forEach(winner => {
         winner.winAmount = 0;
     });
@@ -718,8 +781,20 @@ function endRound(gameState, winners, showdownPlayers = null) {
             const share = Math.floor(pot.amount / eligibleWinners.length);
             const remainder = pot.amount % eligibleWinners.length;
             
-            eligibleWinners.forEach((winner, idx) => {
-                const winAmount = share + (idx === 0 ? remainder : 0);
+            // 餘數按莊家後的位置順序分配（更公平）
+            const sortedWinners = eligibleWinners.sort((a, b) => {
+                const aPos = gameState.players.findIndex(p => p.id === a.id);
+                const bPos = gameState.players.findIndex(p => p.id === b.id);
+                
+                // 計算相對於莊家的位置
+                const aRelPos = (aPos - gameState.dealerIdx + gameState.players.length) % gameState.players.length;
+                const bRelPos = (bPos - gameState.dealerIdx + gameState.players.length) % gameState.players.length;
+                
+                return aRelPos - bRelPos;
+            });
+            
+            sortedWinners.forEach((winner, idx) => {
+                const winAmount = share + (idx < remainder ? 1 : 0);
                 winner.chips += winAmount;
                 winner.winAmount = (winner.winAmount || 0) + winAmount;
             });
