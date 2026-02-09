@@ -560,7 +560,9 @@
                 // 設定滑桿範圍
                 const raiseSlider = document.getElementById('raise-slider');
                 const minRaise = state.lastRaiseAmount || state.bigBlind || 20;
-                const maxRaise = currentPlayer.chips;
+                
+                // 最大加注 = 玩家籌碼 - 需要跟注的金額
+                const maxRaise = Math.max(minRaise, currentPlayer.chips - callAmount);
                 
                 raiseSlider.min = minRaise;
                 raiseSlider.max = maxRaise;

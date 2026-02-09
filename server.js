@@ -74,6 +74,7 @@ function createGameState(players) {
             currentBet: 0,
             folded: false,
             hasActed: false,
+            actedThisRound: false,
             position: idx
         })),
         deck: createDeck(),
@@ -82,13 +83,17 @@ function createGameState(players) {
         sidePots: [],
         currentPlayerIdx: 0,
         stage: 'preflop',
-        dealerIdx: 0,
+        dealerIdx: -1,  // -1 表示還沒開始，第一手會變成 0
         smallBlind: 10,
         bigBlind: 20,
         lastRaiseAmount: 20,
         roundActions: 0,
         actionLog: [], // 遊戲日誌
-        handNumber: 0
+        handNumber: 0,
+        isFirstRound: true,
+        actionTimer: null,  // 行動計時器
+        actionTimeout: 60000,  // 60秒超時
+        actionSequence: 0  // 行動序號，防止重複提交
     };
 }
 
@@ -117,7 +122,8 @@ function startNewRound(gameState) {
         currentBet: 0,
         totalBet: 0,
         folded: false,
-        hasActed: false
+        hasActed: false,
+        actedThisRound: false  // 這一輪是否真正行動過
     }));
 
     if (gameState.players.length < 2) {
@@ -142,6 +148,7 @@ function startNewRound(gameState) {
     gameState.dealerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
     gameState.lastRaiseAmount = gameState.bigBlind;
     gameState.roundActions = 0;
+    gameState.isFirstRound = true;  // 標記這是翻牌前的第一輪
 
     // 發牌
     dealCards(gameState);
@@ -163,30 +170,98 @@ function startNewRound(gameState) {
         firstToActIdx = (gameState.dealerIdx + 3) % gameState.players.length;
     }
     
-    gameState.players[smallBlindIdx].currentBet = gameState.smallBlind;
-    gameState.players[smallBlindIdx].chips -= gameState.smallBlind;
-    gameState.players[smallBlindIdx].totalBet = gameState.smallBlind;
-    gameState.pot += gameState.smallBlind;
+    // 小盲下注（可能少於標準盲注，如果籌碼不足）
+    const actualSmallBlind = Math.min(gameState.smallBlind, gameState.players[smallBlindIdx].chips);
+    gameState.players[smallBlindIdx].currentBet = actualSmallBlind;
+    gameState.players[smallBlindIdx].chips -= actualSmallBlind;
+    gameState.players[smallBlindIdx].totalBet = actualSmallBlind;
+    gameState.pot += actualSmallBlind;
+    
+    // 檢查小盲是否 all-in
+    const smallBlindAllIn = gameState.players[smallBlindIdx].chips === 0;
 
-    gameState.players[bigBlindIdx].currentBet = gameState.bigBlind;
-    gameState.players[bigBlindIdx].chips -= gameState.bigBlind;
-    gameState.players[bigBlindIdx].totalBet = gameState.bigBlind;
-    gameState.pot += gameState.bigBlind;
+    // 大盲下注（可能少於標準盲注，如果籌碼不足）
+    const actualBigBlind = Math.min(gameState.bigBlind, gameState.players[bigBlindIdx].chips);
+    gameState.players[bigBlindIdx].currentBet = actualBigBlind;
+    gameState.players[bigBlindIdx].chips -= actualBigBlind;
+    gameState.players[bigBlindIdx].totalBet = actualBigBlind;
+    gameState.pot += actualBigBlind;
+    
+    // 檢查大盲是否 all-in
+    const bigBlindAllIn = gameState.players[bigBlindIdx].chips === 0;
     
     // 記錄盲注
     gameState.actionLog.push({
         action: 'BLINDS',
-        smallBlind: { player: gameState.players[smallBlindIdx].name, amount: gameState.smallBlind },
-        bigBlind: { player: gameState.players[bigBlindIdx].name, amount: gameState.bigBlind }
+        smallBlind: { player: gameState.players[smallBlindIdx].name, amount: actualSmallBlind, allIn: smallBlindAllIn },
+        bigBlind: { player: gameState.players[bigBlindIdx].name, amount: actualBigBlind, allIn: bigBlindAllIn }
     });
     
-    // 小盲和大盲在翻牌前都還沒真正行動
-    gameState.players[smallBlindIdx].hasActed = false;
-    gameState.players[bigBlindIdx].hasActed = false;
+    // 翻牌前：盲注不算自願行動，都還沒真正行動過
+    // 但如果盲注 all-in 了，設置 hasActed 為 true（他們無法再行動）
+    gameState.players[smallBlindIdx].hasActed = smallBlindAllIn;
+    gameState.players[bigBlindIdx].hasActed = bigBlindAllIn;
+    gameState.players[smallBlindIdx].actedThisRound = smallBlindAllIn;
+    gameState.players[bigBlindIdx].actedThisRound = bigBlindAllIn;
 
+    // 設置第一個行動的玩家（跳過 all-in 的玩家）
     gameState.currentPlayerIdx = firstToActIdx;
+    
+    // 如果第一個玩家已經 all-in 或棄牌，找下一個
+    let searchCount = 0;
+    while ((gameState.players[gameState.currentPlayerIdx].chips === 0 || 
+            gameState.players[gameState.currentPlayerIdx].folded) && 
+           searchCount < gameState.players.length) {
+        gameState.currentPlayerIdx = (gameState.currentPlayerIdx + 1) % gameState.players.length;
+        searchCount++;
+    }
 
     return true;
+}
+
+// 開始行動計時器
+function startActionTimer(gameState, roomId) {
+    // 清除舊的計時器
+    if (gameState.actionTimer) {
+        clearTimeout(gameState.actionTimer);
+    }
+    
+    const currentPlayer = gameState.players[gameState.currentPlayerIdx];
+    
+    // 如果當前玩家已經 all-in 或棄牌，不需要計時
+    if (!currentPlayer || currentPlayer.folded || currentPlayer.chips === 0) {
+        return;
+    }
+    
+    // 設置新的計時器
+    gameState.actionTimer = setTimeout(() => {
+        console.log(`${currentPlayer.name} timed out - auto fold`);
+        
+        // 超時自動棄牌
+        currentPlayer.folded = true;
+        currentPlayer.hasActed = true;
+        currentPlayer.actedThisRound = true;
+        
+        gameState.actionLog.push({
+            action: 'TIMEOUT_FOLD',
+            player: currentPlayer.name,
+            stage: gameState.stage
+        });
+        
+        // 移到下一個玩家
+        moveToNextPlayer(gameState);
+        
+        // 檢查是否進入下一階段
+        if (isRoundComplete(gameState)) {
+            advanceStage(gameState);
+        }
+        
+        // 廣播更新
+        broadcastGameState(gameState);
+        
+        // 為下一個玩家啟動計時器
+        startActionTimer(gameState, roomId);
+    }, gameState.actionTimeout);
 }
 
 // 處理玩家行動
@@ -215,6 +290,13 @@ function handleAction(gameState, playerId, action, amount = 0) {
         case 'fold':
             player.folded = true;
             player.hasActed = true;
+            player.actedThisRound = true;
+            
+            gameState.actionLog.push({
+                action: 'FOLD',
+                player: player.name,
+                stage: gameState.stage
+            });
             break;
             
         case 'check':
@@ -222,6 +304,13 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 return { error: '無法過牌，需要跟注或棄牌' };
             }
             player.hasActed = true;
+            player.actedThisRound = true;
+            
+            gameState.actionLog.push({
+                action: 'CHECK',
+                player: player.name,
+                stage: gameState.stage
+            });
             break;
             
         case 'call':
@@ -238,19 +327,38 @@ function handleAction(gameState, playerId, action, amount = 0) {
             player.chips -= actualCall;
             gameState.pot += actualCall;
             player.hasActed = true;
+            player.actedThisRound = true;
             
             // 追蹤總投入
             player.totalBet = (player.totalBet || 0) + actualCall;
             
             // 如果 all-in
-            if (player.chips === 0 && actualCall < callAmount) {
+            const isCallAllIn = player.chips === 0 && actualCall < callAmount;
+            if (isCallAllIn) {
                 console.log(`${player.name} all-in (call) with ${actualCall}`);
             }
+            
+            gameState.actionLog.push({
+                action: isCallAllIn ? 'CALL_ALL_IN' : 'CALL',
+                player: player.name,
+                amount: actualCall,
+                stage: gameState.stage
+            });
             break;
             
         case 'raise':
             if (amount <= 0) {
                 return { error: '加注金額必須大於 0' };
+            }
+            
+            // 驗證金額是否為整數
+            if (!Number.isInteger(amount)) {
+                return { error: '加注金額必須是整數' };
+            }
+            
+            // 驗證金額是否過大（防止惡意輸入）
+            if (amount > 1000000) {
+                return { error: '加注金額過大' };
             }
             
             // 計算需要跟注的金額
@@ -274,6 +382,7 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 player.chips = 0;
                 gameState.pot += allInAmount;
                 player.hasActed = true;
+                player.actedThisRound = true;
                 player.totalBet = (player.totalBet || 0) + allInAmount;
                 
                 // 如果 all-in 金額大於等於最小加注，其他玩家需要重新行動
@@ -281,11 +390,20 @@ function handleAction(gameState, playerId, action, amount = 0) {
                     gameState.players.forEach((p, idx) => {
                         if (idx !== playerIdx && !p.folded && p.chips > 0) {
                             p.hasActed = false;
+                            // 不重置 actedThisRound，因為他們確實行動過了
                         }
                     });
                 }
                 
                 console.log(`${player.name} all-in raised ${actualRaiseAmount}`);
+                
+                gameState.actionLog.push({
+                    action: 'RAISE_ALL_IN',
+                    player: player.name,
+                    amount: actualRaiseAmount,
+                    totalBet: player.currentBet,
+                    stage: gameState.stage
+                });
             } else {
                 // 正常加注
                 const lastRaiseIncrement = gameState.lastRaiseAmount;
@@ -300,6 +418,7 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 player.chips -= totalRaise;
                 gameState.pot += totalRaise;
                 player.hasActed = true;
+                player.actedThisRound = true;
                 player.totalBet = (player.totalBet || 0) + totalRaise;
                 
                 // 更新最後加注增量（這次加注的增量）
@@ -309,10 +428,19 @@ function handleAction(gameState, playerId, action, amount = 0) {
                 gameState.players.forEach((p, idx) => {
                     if (idx !== playerIdx && !p.folded && p.chips > 0) {
                         p.hasActed = false;
+                        // 不重置 actedThisRound
                     }
                 });
                 
                 console.log(`${player.name} raised ${amount}, total bet: ${player.currentBet}, total invested: ${player.totalBet}`);
+                
+                gameState.actionLog.push({
+                    action: 'RAISE',
+                    player: player.name,
+                    raiseAmount: amount,
+                    totalBet: player.currentBet,
+                    stage: gameState.stage
+                });
             }
             
             break;
@@ -322,6 +450,13 @@ function handleAction(gameState, playerId, action, amount = 0) {
     }
 
     gameState.roundActions++;
+    gameState.actionSequence++;  // 增加行動序號
+
+    // 清除行動計時器
+    if (gameState.actionTimer) {
+        clearTimeout(gameState.actionTimer);
+        gameState.actionTimer = null;
+    }
 
     // 移到下一個玩家
     moveToNextPlayer(gameState);
@@ -336,6 +471,14 @@ function handleAction(gameState, playerId, action, amount = 0) {
 
 // 移到下一個玩家
 function moveToNextPlayer(gameState) {
+    // 先檢查是否還有可以行動的玩家
+    const playersCanAct = gameState.players.filter(p => !p.folded && p.chips > 0);
+    
+    // 如果沒有人能行動（所有人都 all-in 或棄牌），不需要移動
+    if (playersCanAct.length === 0) {
+        return;
+    }
+    
     let nextPlayer = (gameState.currentPlayerIdx + 1) % gameState.players.length;
     let count = 0;
     
@@ -345,7 +488,10 @@ function moveToNextPlayer(gameState) {
         count++;
     }
     
-    gameState.currentPlayerIdx = nextPlayer;
+    // 如果找到了有籌碼的玩家，才設置
+    if (!gameState.players[nextPlayer].folded && gameState.players[nextPlayer].chips > 0) {
+        gameState.currentPlayerIdx = nextPlayer;
+    }
 }
 
 // 檢查回合是否完成
@@ -368,15 +514,26 @@ function isRoundComplete(gameState) {
 
     const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
     
-    // 檢查所有還能行動的玩家：
-    // 1. 下注金額等於最大下注
-    // 2. 已經行動過
-    const allPlayersReady = playersWithChips.every(p => {
-        const betMatches = p.currentBet === maxBet;
-        return betMatches && p.hasActed;
-    });
-    
-    return allPlayersReady;
+    // 在翻牌前的第一輪，檢查更嚴格
+    if (gameState.stage === 'preflop' && gameState.isFirstRound) {
+        // 所有還能行動的玩家必須：
+        // 1. 下注金額等於最大下注
+        // 2. 已經主動行動過（actedThisRound）
+        const allPlayersReady = playersWithChips.every(p => {
+            const betMatches = p.currentBet === maxBet;
+            return betMatches && p.actedThisRound;
+        });
+        
+        return allPlayersReady;
+    } else {
+        // 其他情況：所有還能行動的玩家必須下注相同且已行動
+        const allPlayersReady = playersWithChips.every(p => {
+            const betMatches = p.currentBet === maxBet;
+            return betMatches && p.hasActed;
+        });
+        
+        return allPlayersReady;
+    }
 }
 
 // 進入下一階段
@@ -393,11 +550,13 @@ function advanceStage(gameState) {
     gameState.players.forEach(p => {
         p.currentBet = 0;
         p.hasActed = false;
+        p.actedThisRound = false;  // 新階段重置
         // totalBet 保留不重置
     });
     
     gameState.roundActions = 0;
     gameState.lastRaiseAmount = gameState.bigBlind;
+    gameState.isFirstRound = false;  // 不再是第一輪
 
     // 檢查是否還有玩家能行動
     const playersWithChips = activePlayers.filter(p => p.chips > 0);
@@ -405,6 +564,12 @@ function advanceStage(gameState) {
 
     // 如果所有人都 all-in，直接發完所有牌到 showdown
     if (allPlayersAllIn) {
+        // 清除計時器（沒有玩家需要行動）
+        if (gameState.actionTimer) {
+            clearTimeout(gameState.actionTimer);
+            gameState.actionTimer = null;
+        }
+        
         // 發完剩餘的牌
         while (gameState.stage !== 'river') {
             switch (gameState.stage) {
@@ -760,6 +925,12 @@ function getHandTypeName(type) {
 
 // 結束回合
 function endRound(gameState, winners, showdownPlayers = null) {
+    // 清除行動計時器
+    if (gameState.actionTimer) {
+        clearTimeout(gameState.actionTimer);
+        gameState.actionTimer = null;
+    }
+    
     // winners 可能是單一玩家或陣列
     const winnerArray = Array.isArray(winners) ? winners : [winners];
     
@@ -889,9 +1060,43 @@ wss.on('connection', (ws) => {
         console.log('Client disconnected');
         // 清理斷線的玩家
         rooms.forEach((room, roomId) => {
-            room.players = room.players.filter(p => p.ws !== ws);
-            if (room.players.length === 0) {
-                rooms.delete(roomId);
+            const disconnectedPlayer = room.players.find(p => p.ws === ws);
+            
+            if (disconnectedPlayer) {
+                // 從房間移除
+                room.players = room.players.filter(p => p.ws !== ws);
+                
+                // 如果遊戲正在進行，將玩家標記為棄牌
+                if (room.gameState) {
+                    const gamePlayer = room.gameState.players.find(p => p.id === disconnectedPlayer.id);
+                    if (gamePlayer && !gamePlayer.folded) {
+                        gamePlayer.folded = true;
+                        console.log(`${gamePlayer.name} disconnected and folded`);
+                        
+                        // 檢查是否需要進入下一階段
+                        const activePlayers = room.gameState.players.filter(p => !p.folded);
+                        if (activePlayers.length === 1) {
+                            // 只剩一人，結束回合
+                            endRound(room.gameState, activePlayers[0]);
+                            broadcastGameState(room.gameState);
+                        } else if (gamePlayer.id === room.gameState.players[room.gameState.currentPlayerIdx]?.id) {
+                            // 斷線的是當前玩家，跳到下一位
+                            moveToNextPlayer(room.gameState);
+                            
+                            // 檢查是否回合完成
+                            if (isRoundComplete(room.gameState)) {
+                                advanceStage(room.gameState);
+                            }
+                            
+                            broadcastGameState(room.gameState);
+                        }
+                    }
+                }
+                
+                // 如果房間空了，刪除房間
+                if (room.players.length === 0) {
+                    rooms.delete(roomId);
+                }
             }
         });
     });
@@ -969,6 +1174,9 @@ function handleStartGame(roomId) {
     });
 
     broadcastGameState(gameState);
+    
+    // 為第一個玩家啟動計時器
+    startActionTimer(gameState, roomId);
 }
 
 // 處理玩家行動
@@ -990,6 +1198,9 @@ function handlePlayerAction(data) {
     }
 
     broadcastGameState(room.gameState);
+    
+    // 為下一個玩家啟動計時器
+    startActionTimer(room.gameState, data.roomId);
 }
 
 // 處理玩家確認結果
@@ -1011,6 +1222,11 @@ function handlePlayerConfirmResult(data) {
     }
 
     broadcastGameState(room.gameState);
+    
+    // 如果開始了新回合，啟動計時器
+    if (result.newRound) {
+        startActionTimer(room.gameState, data.roomId);
+    }
 }
 
 const PORT = process.env.PORT || 3000;
