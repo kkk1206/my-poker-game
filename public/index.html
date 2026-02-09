@@ -402,6 +402,9 @@
 
         // 更新遊戲畫面
         function updateGame(state) {
+            const startTime = performance.now();
+            console.log(`[UpdateGame] START - timestamp: ${Date.now()}`);
+            
             // 更新底池（包含邊池）
             if (state.pots && state.pots.length > 0) {
                 const potDisplay = state.pots.map(pot => 
@@ -494,6 +497,9 @@
 
             // 更新按鈕狀態
             updateButtons(state);
+            
+            const endTime = performance.now();
+            console.log(`[UpdateGame] END - took ${(endTime - startTime).toFixed(2)}ms`);
         }
         
         // 取得手牌類型名稱（前端版本）

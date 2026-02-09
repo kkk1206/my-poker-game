@@ -115,6 +115,8 @@ function dealCommunityCards(gameState, count) {
 
 // 開始新回合
 function startNewRound(gameState) {
+    console.log(`[NewRound] START - timestamp: ${Date.now()}`);
+    
     // 重置玩家狀態
     gameState.players = gameState.players.filter(p => p.chips > 0).map(p => ({
         ...p,
@@ -182,11 +184,17 @@ function startNewRound(gameState) {
         bigBlindIdx = (dealerIdx + 1) % gameState.players.length;
         // 翻牌前小盲先行動
         firstToActIdx = smallBlindIdx;
-    } else {
-        // 三人以上：莊家後第一位是小盲，第二位是大盲
+    } else if (gameState.players.length === 3) {
+        // 三人桌：莊家後第一位是小盲，第二位是大盲
         smallBlindIdx = (dealerIdx + 1) % gameState.players.length;
         bigBlindIdx = (dealerIdx + 2) % gameState.players.length;
-        // 翻牌前大盲後第一位先行動
+        // 翻牌前小盲先行動（因為沒有 UTG）
+        firstToActIdx = smallBlindIdx;
+    } else {
+        // 四人以上：莊家後第一位是小盲，第二位是大盲，第三位是 UTG
+        smallBlindIdx = (dealerIdx + 1) % gameState.players.length;
+        bigBlindIdx = (dealerIdx + 2) % gameState.players.length;
+        // 翻牌前 UTG（大盲後第一位）先行動
         firstToActIdx = (dealerIdx + 3) % gameState.players.length;
     }
     
@@ -237,6 +245,7 @@ function startNewRound(gameState) {
         searchCount++;
     }
 
+    console.log(`[NewRound] END - timestamp: ${Date.now()}, currentPlayerIdx: ${gameState.currentPlayerIdx}`);
     return true;
 }
 
@@ -1033,10 +1042,17 @@ function endRound(gameState, winners, showdownPlayers = null) {
 
 // 廣播遊戲狀態
 function broadcastGameState(gameState) {
+    const startTime = Date.now();
+    console.log(`[Broadcast] START - timestamp: ${startTime}`);
+    
     const room = Array.from(rooms.values()).find(r => r.gameState === gameState);
-    if (!room) return;
+    if (!room) {
+        console.log(`[Broadcast] ERROR: Room not found`);
+        return;
+    }
 
     const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
+    console.log(`[Broadcast] Broadcasting to ${room.players.length} players`);
 
     room.players.forEach(player => {
         const playerState = {
@@ -1067,6 +1083,9 @@ function broadcastGameState(gameState) {
             }));
         }
     });
+    
+    const endTime = Date.now();
+    console.log(`[Broadcast] END - took ${endTime - startTime}ms`);
 }
 
 // WebSocket 連接
@@ -1245,10 +1264,16 @@ function handlePlayerAction(data) {
 
 // 處理玩家確認結果
 function handlePlayerConfirmResult(data) {
+    console.log(`[ConfirmHandler] START - timestamp: ${Date.now()}`);
     const room = rooms.get(data.roomId);
-    if (!room || !room.gameState) return;
+    if (!room || !room.gameState) {
+        console.log(`[ConfirmHandler] ERROR: Room not found`);
+        return;
+    }
 
+    console.log(`[ConfirmHandler] Calling handleConfirmResult - timestamp: ${Date.now()}`);
     const result = handleConfirmResult(room.gameState, data.playerId);
+    console.log(`[ConfirmHandler] Result received - timestamp: ${Date.now()}`, result);
     
     if (result.error) {
         const player = room.players.find(p => p.id === data.playerId);
@@ -1261,12 +1286,16 @@ function handlePlayerConfirmResult(data) {
         return;
     }
 
+    console.log(`[ConfirmHandler] Broadcasting game state - timestamp: ${Date.now()}`);
     broadcastGameState(room.gameState);
+    console.log(`[ConfirmHandler] Broadcast complete - timestamp: ${Date.now()}`);
     
     // 如果開始了新回合，啟動計時器
     if (result.newRound) {
+        console.log(`[ConfirmHandler] Starting new round timer - timestamp: ${Date.now()}`);
         startActionTimer(room.gameState, data.roomId);
     }
+    console.log(`[ConfirmHandler] END - timestamp: ${Date.now()}`);
 }
 
 const PORT = process.env.PORT || 3000;
