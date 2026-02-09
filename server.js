@@ -83,7 +83,7 @@ function createGameState(players) {
         sidePots: [],
         currentPlayerIdx: 0,
         stage: 'preflop',
-        dealerIdx: -1,  // -1 表示還沒開始，第一手會變成 0
+        dealerPlayerId: null,  // 改用玩家 ID 追蹤莊家
         smallBlind: 10,
         bigBlind: 20,
         lastRaiseAmount: 20,
@@ -145,10 +145,30 @@ function startNewRound(gameState) {
     gameState.pot = 0;
     gameState.sidePots = [];
     gameState.stage = 'preflop';
-    gameState.dealerIdx = (gameState.dealerIdx + 1) % gameState.players.length;
     gameState.lastRaiseAmount = gameState.bigBlind;
     gameState.roundActions = 0;
     gameState.isFirstRound = true;  // 標記這是翻牌前的第一輪
+
+    // 決定新的莊家
+    if (gameState.dealerPlayerId === null) {
+        // 第一手，隨機選擇莊家
+        gameState.dealerPlayerId = gameState.players[0].id;
+    } else {
+        // 找到當前莊家在玩家陣列中的位置
+        const currentDealerIdx = gameState.players.findIndex(p => p.id === gameState.dealerPlayerId);
+        
+        if (currentDealerIdx === -1) {
+            // 當前莊家已破產，選下一位
+            gameState.dealerPlayerId = gameState.players[0].id;
+        } else {
+            // 莊家順時針移動到下一位
+            const nextDealerIdx = (currentDealerIdx + 1) % gameState.players.length;
+            gameState.dealerPlayerId = gameState.players[nextDealerIdx].id;
+        }
+    }
+    
+    // 找到莊家的索引
+    const dealerIdx = gameState.players.findIndex(p => p.id === gameState.dealerPlayerId);
 
     // 發牌
     dealCards(gameState);
@@ -158,16 +178,16 @@ function startNewRound(gameState) {
     
     if (gameState.players.length === 2) {
         // 兩人桌：莊家是小盲，另一位是大盲
-        smallBlindIdx = gameState.dealerIdx;
-        bigBlindIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+        smallBlindIdx = dealerIdx;
+        bigBlindIdx = (dealerIdx + 1) % gameState.players.length;
         // 翻牌前小盲先行動
         firstToActIdx = smallBlindIdx;
     } else {
         // 三人以上：莊家後第一位是小盲，第二位是大盲
-        smallBlindIdx = (gameState.dealerIdx + 1) % gameState.players.length;
-        bigBlindIdx = (gameState.dealerIdx + 2) % gameState.players.length;
+        smallBlindIdx = (dealerIdx + 1) % gameState.players.length;
+        bigBlindIdx = (dealerIdx + 2) % gameState.players.length;
         // 翻牌前大盲後第一位先行動
-        firstToActIdx = (gameState.dealerIdx + 3) % gameState.players.length;
+        firstToActIdx = (dealerIdx + 3) % gameState.players.length;
     }
     
     // 小盲下注（可能少於標準盲注，如果籌碼不足）
@@ -193,6 +213,7 @@ function startNewRound(gameState) {
     // 記錄盲注
     gameState.actionLog.push({
         action: 'BLINDS',
+        dealer: gameState.players[dealerIdx].name,
         smallBlind: { player: gameState.players[smallBlindIdx].name, amount: actualSmallBlind, allIn: smallBlindAllIn },
         bigBlind: { player: gameState.players[bigBlindIdx].name, amount: actualBigBlind, allIn: bigBlindAllIn }
     });
@@ -616,7 +637,8 @@ function advanceStage(gameState) {
     }
 
     // 從莊家後第一位有籌碼的玩家開始
-    let startIdx = (gameState.dealerIdx + 1) % gameState.players.length;
+    const dealerIdx = gameState.players.findIndex(p => p.id === gameState.dealerPlayerId);
+    let startIdx = (dealerIdx + 1) % gameState.players.length;
     let foundPlayer = false;
     let attempts = 0;
     
@@ -890,17 +912,29 @@ function calculateSidePots(gameState) {
 
 // 處理玩家確認結果
 function handleConfirmResult(gameState, playerId) {
+    console.log(`[Confirm] Player ${playerId} attempting to confirm`);
+    console.log(`[Confirm] waitingForConfirm: ${gameState.waitingForConfirm}`);
+    console.log(`[Confirm] confirmedPlayers: ${JSON.stringify(gameState.confirmedPlayers)}`);
+    
     if (!gameState.waitingForConfirm) {
+        console.log(`[Confirm] ERROR: Not in waiting state`);
         return { error: '遊戲未在等待確認狀態' };
     }
     
     if (!gameState.confirmedPlayers.includes(playerId)) {
         gameState.confirmedPlayers.push(playerId);
+        console.log(`[Confirm] Player ${playerId} confirmed. Total: ${gameState.confirmedPlayers.length}`);
+    } else {
+        console.log(`[Confirm] Player ${playerId} already confirmed`);
     }
     
     // 檢查是否所有玩家都確認了
     const activePlayers = gameState.players.filter(p => p.chips > 0);
+    console.log(`[Confirm] Active players: ${activePlayers.length}, Confirmed: ${gameState.confirmedPlayers.length}`);
+    
     if (gameState.confirmedPlayers.length >= activePlayers.length) {
+        console.log(`[Confirm] All players confirmed! Starting new round...`);
+        
         // 所有玩家都確認了，開始新回合
         gameState.players.forEach(p => delete p.winAmount);
         delete gameState.winners;
@@ -910,7 +944,10 @@ function handleConfirmResult(gameState, playerId) {
         delete gameState.pots;
         
         if (startNewRound(gameState)) {
+            console.log(`[Confirm] New round started successfully`);
             return { success: true, newRound: true };
+        } else {
+            console.log(`[Confirm] ERROR: Failed to start new round`);
         }
     }
     
@@ -953,13 +990,14 @@ function endRound(gameState, winners, showdownPlayers = null) {
             const remainder = pot.amount % eligibleWinners.length;
             
             // 餘數按莊家後的位置順序分配（更公平）
+            const dealerIdx = gameState.players.findIndex(p => p.id === gameState.dealerPlayerId);
             const sortedWinners = eligibleWinners.sort((a, b) => {
                 const aPos = gameState.players.findIndex(p => p.id === a.id);
                 const bPos = gameState.players.findIndex(p => p.id === b.id);
                 
                 // 計算相對於莊家的位置
-                const aRelPos = (aPos - gameState.dealerIdx + gameState.players.length) % gameState.players.length;
-                const bRelPos = (bPos - gameState.dealerIdx + gameState.players.length) % gameState.players.length;
+                const aRelPos = (aPos - dealerIdx + gameState.players.length) % gameState.players.length;
+                const bRelPos = (bPos - dealerIdx + gameState.players.length) % gameState.players.length;
                 
                 return aRelPos - bRelPos;
             });
@@ -1004,9 +1042,11 @@ function broadcastGameState(gameState) {
         const playerState = {
             ...gameState,
             currentPlayer: gameState.players[gameState.currentPlayerIdx]?.id,
+            dealerPlayerId: gameState.dealerPlayerId,  // 加入莊家 ID
             maxBet: maxBet,
             players: gameState.players.map(p => ({
                 ...p,
+                isDealer: p.id === gameState.dealerPlayerId,  // 標記莊家
                 // 在 showdown 只顯示未棄牌玩家的牌，否則只顯示自己的牌
                 cards: (gameState.showdownPlayers && !p.folded) || p.id === player.id ? p.cards : 
                        (p.cards && p.cards.length > 0 ? [{}, {}] : [])

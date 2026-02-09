@@ -376,7 +376,10 @@
                     updateGame(gameState);
                     break;
                 case 'gameUpdate':
+                    console.log('[Frontend] Received gameUpdate');
                     gameState = message.gameState;
+                    console.log('[Frontend] waitingForConfirm:', gameState.waitingForConfirm);
+                    console.log('[Frontend] confirmedPlayers:', gameState.confirmedPlayers);
                     updateGame(gameState);
                     break;
                 case 'error':
@@ -441,7 +444,7 @@
                 
                 return `
                     <div class="player ${isActive ? 'active' : ''} ${isCurrentUser ? 'current-user' : ''}">
-                        <div class="player-name">${player.name} ${isActive ? '⭐' : ''}</div>
+                        <div class="player-name">${player.name} ${player.isDealer ? '🔘' : ''} ${isActive ? '⭐' : ''}</div>
                         <div class="player-chips">籌碼: $${player.chips}</div>
                         <div class="player-chips">當前注: $${player.currentBet}</div>
                         ${player.folded ? '<div style="color: #ff6b6b;">已棄牌</div>' : ''}
@@ -641,6 +644,8 @@
         });
 
         document.getElementById('confirm-result-btn').addEventListener('click', () => {
+            console.log('[Frontend] Confirm button clicked');
+            console.log('[Frontend] Sending confirmResult message:', { type: 'confirmResult', roomId, playerId });
             sendMessage({ type: 'confirmResult', roomId, playerId });
         });
     </script>
