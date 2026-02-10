@@ -178,6 +178,8 @@ function startNewRound(gameState) {
     // 盲注位置
     let smallBlindIdx, bigBlindIdx, firstToActIdx;
     
+    console.log(`[NewRound] Players count: ${gameState.players.length}, DealerIdx: ${dealerIdx}`);
+    
     if (gameState.players.length === 2) {
         // 兩人桌：莊家是小盲，另一位是大盲
         smallBlindIdx = dealerIdx;
@@ -197,6 +199,11 @@ function startNewRound(gameState) {
         // 翻牌前 UTG（大盲後第一位）先行動
         firstToActIdx = (dealerIdx + 3) % gameState.players.length;
     }
+    
+    console.log(`[NewRound] Positions - Dealer: ${gameState.players[dealerIdx].name} (idx=${dealerIdx})`);
+    console.log(`[NewRound] Positions - SB: ${gameState.players[smallBlindIdx].name} (idx=${smallBlindIdx})`);
+    console.log(`[NewRound] Positions - BB: ${gameState.players[bigBlindIdx].name} (idx=${bigBlindIdx})`);
+    console.log(`[NewRound] First to act: ${gameState.players[firstToActIdx].name} (idx=${firstToActIdx})`);
     
     // 小盲下注（可能少於標準盲注，如果籌碼不足）
     const actualSmallBlind = Math.min(gameState.smallBlind, gameState.players[smallBlindIdx].chips);
@@ -235,16 +242,20 @@ function startNewRound(gameState) {
 
     // 設置第一個行動的玩家（跳過 all-in 的玩家）
     gameState.currentPlayerIdx = firstToActIdx;
+    console.log(`[NewRound] Initial currentPlayerIdx set to: ${gameState.currentPlayerIdx} (${gameState.players[gameState.currentPlayerIdx].name})`);
+    console.log(`[NewRound] Player chips: ${gameState.players[gameState.currentPlayerIdx].chips}`);
     
     // 如果第一個玩家已經 all-in 或棄牌，找下一個
     let searchCount = 0;
     while ((gameState.players[gameState.currentPlayerIdx].chips === 0 || 
             gameState.players[gameState.currentPlayerIdx].folded) && 
            searchCount < gameState.players.length) {
+        console.log(`[NewRound] Skipping player idx=${gameState.currentPlayerIdx} (chips=${gameState.players[gameState.currentPlayerIdx].chips}, folded=${gameState.players[gameState.currentPlayerIdx].folded})`);
         gameState.currentPlayerIdx = (gameState.currentPlayerIdx + 1) % gameState.players.length;
         searchCount++;
     }
-
+    
+    console.log(`[NewRound] Final currentPlayerIdx: ${gameState.currentPlayerIdx} (${gameState.players[gameState.currentPlayerIdx].name})`);
     console.log(`[NewRound] END - timestamp: ${Date.now()}, currentPlayerIdx: ${gameState.currentPlayerIdx}`);
     return true;
 }
@@ -1095,6 +1106,7 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            console.log(`[WebSocket] Received message type: ${data.type} at ${Date.now()}`);
 
             switch (data.type) {
                 case 'join':
@@ -1107,11 +1119,15 @@ wss.on('connection', (ws) => {
                     handlePlayerAction(data);
                     break;
                 case 'confirmResult':
+                    console.log(`[WebSocket] Processing confirmResult for player ${data.playerId} in room ${data.roomId}`);
                     handlePlayerConfirmResult(data);
                     break;
+                default:
+                    console.log(`[WebSocket] WARNING: Unknown message type: ${data.type}`);
             }
         } catch (error) {
             console.error('Error handling message:', error);
+            console.error('Message was:', message.toString());
         }
     });
 

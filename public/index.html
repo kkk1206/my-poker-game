@@ -485,14 +485,26 @@
             
             if (state.waitingForConfirm) {
                 confirmContainer.style.display = 'block';
-                confirmBtn.disabled = state.hasConfirmed;
-                confirmBtn.textContent = state.hasConfirmed ? '已確認 ✓' : '確認結果並繼續下一局';
+                
+                // 確保按鈕狀態正確
+                if (state.hasConfirmed) {
+                    confirmBtn.disabled = true;
+                    confirmBtn.textContent = '已確認 ✓';
+                    confirmBtn.style.opacity = '0.6';
+                } else {
+                    confirmBtn.disabled = false;
+                    confirmBtn.textContent = '確認結果並繼續下一局';
+                    confirmBtn.style.opacity = '1';
+                }
                 
                 const confirmedCount = state.confirmedPlayers?.length || 0;
                 const totalPlayers = state.players.filter(p => p.chips > 0).length;
                 confirmStatus.textContent = `等待玩家確認 (${confirmedCount}/${totalPlayers})`;
             } else {
                 confirmContainer.style.display = 'none';
+                // 重置按鈕狀態，為下一次做準備
+                confirmBtn.disabled = false;
+                confirmBtn.style.opacity = '1';
             }
 
             // 更新按鈕狀態
@@ -650,9 +662,41 @@
         });
 
         document.getElementById('confirm-result-btn').addEventListener('click', () => {
-            console.log('[Frontend] Confirm button clicked');
-            console.log('[Frontend] Sending confirmResult message:', { type: 'confirmResult', roomId, playerId });
-            sendMessage({ type: 'confirmResult', roomId, playerId });
+            console.log('[Frontend] ========== Confirm Button Clicked ==========');
+            console.log('[Frontend] Timestamp:', Date.now());
+            console.log('[Frontend] roomId:', roomId);
+            console.log('[Frontend] playerId:', playerId);
+            console.log('[Frontend] WebSocket state:', ws ? ws.readyState : 'null');
+            console.log('[Frontend] WebSocket.OPEN:', WebSocket.OPEN);
+            
+            if (!ws) {
+                console.error('[Frontend] ERROR: WebSocket is null!');
+                alert('連線已斷開，請重新整理頁面');
+                return;
+            }
+            
+            if (ws.readyState !== WebSocket.OPEN) {
+                console.error('[Frontend] ERROR: WebSocket not open! State:', ws.readyState);
+                alert('連線不穩定，請重新整理頁面');
+                return;
+            }
+            
+            if (!roomId || !playerId) {
+                console.error('[Frontend] ERROR: Missing roomId or playerId!');
+                alert('遊戲狀態錯誤，請重新整理頁面');
+                return;
+            }
+            
+            const message = { type: 'confirmResult', roomId, playerId };
+            console.log('[Frontend] Sending message:', JSON.stringify(message));
+            
+            try {
+                ws.send(JSON.stringify(message));
+                console.log('[Frontend] Message sent successfully');
+            } catch (error) {
+                console.error('[Frontend] ERROR sending message:', error);
+                alert('發送訊息失敗：' + error.message);
+            }
         });
     </script>
 </body>
