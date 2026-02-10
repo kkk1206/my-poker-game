@@ -257,6 +257,39 @@ function startNewRound(gameState) {
     
     console.log(`[NewRound] Final currentPlayerIdx: ${gameState.currentPlayerIdx} (${gameState.players[gameState.currentPlayerIdx].name})`);
     console.log(`[NewRound] END - timestamp: ${Date.now()}, currentPlayerIdx: ${gameState.currentPlayerIdx}`);
+    
+    // 驗證：檢查當前玩家是否正確
+    if (gameState.players.length === 2) {
+        // 兩人桌：小盲（莊家）應該先行動
+        const expectedIdx = dealerIdx;
+        if (gameState.currentPlayerIdx !== expectedIdx) {
+            console.error(`[NewRound] ❌ ERROR: 兩人桌應該小盲(${expectedIdx})先，但現在是 ${gameState.currentPlayerIdx}`);
+        } else {
+            console.log(`[NewRound] ✓ 兩人桌順序正確：小盲先行動`);
+        }
+    } else if (gameState.players.length === 3) {
+        // 三人桌：小盲應該先行動
+        const expectedIdx = smallBlindIdx;
+        // 除非小盲 all-in
+        if (gameState.players[smallBlindIdx].chips === 0) {
+            console.log(`[NewRound] ⚠ 小盲 all-in，正確跳過到 idx=${gameState.currentPlayerIdx}`);
+        } else if (gameState.currentPlayerIdx !== expectedIdx) {
+            console.error(`[NewRound] ❌❌❌ ERROR: 三人桌應該小盲(${expectedIdx})先，但現在是 ${gameState.currentPlayerIdx}`);
+            console.error(`[NewRound] 小盲: ${gameState.players[smallBlindIdx].name}, 大盲: ${gameState.players[bigBlindIdx].name}`);
+            console.error(`[NewRound] 當前玩家: ${gameState.players[gameState.currentPlayerIdx].name}`);
+        } else {
+            console.log(`[NewRound] ✓ 三人桌順序正確：小盲先行動`);
+        }
+    } else {
+        // 四人以上：UTG 應該先行動
+        const expectedIdx = (dealerIdx + 3) % gameState.players.length;
+        if (gameState.currentPlayerIdx !== expectedIdx) {
+            console.error(`[NewRound] ❌ ERROR: 應該 UTG(${expectedIdx})先，但現在是 ${gameState.currentPlayerIdx}`);
+        } else {
+            console.log(`[NewRound] ✓ 四人以上順序正確：UTG先行動`);
+        }
+    }
+    
     return true;
 }
 
@@ -271,8 +304,11 @@ function startActionTimer(gameState, roomId) {
     
     // 如果當前玩家已經 all-in 或棄牌，不需要計時
     if (!currentPlayer || currentPlayer.folded || currentPlayer.chips === 0) {
+        console.log(`[Timer] Current player cannot act (idx=${gameState.currentPlayerIdx}), no timer needed`);
         return;
     }
+    
+    console.log(`[Timer] Setting ${gameState.actionTimeout/1000}s timer for ${currentPlayer.name}`);
     
     // 設置新的計時器
     gameState.actionTimer = setTimeout(() => {
@@ -963,8 +999,11 @@ function handleConfirmResult(gameState, playerId) {
         delete gameState.confirmedPlayers;
         delete gameState.pots;
         
-        if (startNewRound(gameState)) {
+        const roundStarted = startNewRound(gameState);
+        
+        if (roundStarted) {
             console.log(`[Confirm] New round started successfully`);
+            console.log(`[Confirm] Current player should be: ${gameState.players[gameState.currentPlayerIdx]?.name} (idx=${gameState.currentPlayerIdx})`);
             return { success: true, newRound: true };
         } else {
             console.log(`[Confirm] ERROR: Failed to start new round`);
@@ -1287,6 +1326,14 @@ function handlePlayerConfirmResult(data) {
         return;
     }
 
+    // 防止重複處理
+    if (room.processingConfirm) {
+        console.log(`[ConfirmHandler] Already processing, ignoring duplicate request`);
+        return;
+    }
+    
+    room.processingConfirm = true;
+
     console.log(`[ConfirmHandler] Calling handleConfirmResult - timestamp: ${Date.now()}`);
     const result = handleConfirmResult(room.gameState, data.playerId);
     console.log(`[ConfirmHandler] Result received - timestamp: ${Date.now()}`, result);
@@ -1299,6 +1346,7 @@ function handlePlayerConfirmResult(data) {
                 message: result.error
             }));
         }
+        room.processingConfirm = false;
         return;
     }
 
@@ -1310,7 +1358,14 @@ function handlePlayerConfirmResult(data) {
     if (result.newRound) {
         console.log(`[ConfirmHandler] Starting new round timer - timestamp: ${Date.now()}`);
         startActionTimer(room.gameState, data.roomId);
+        room.processingConfirm = false;
+    } else {
+        // 稍後重置標記，允許其他玩家確認
+        setTimeout(() => {
+            room.processingConfirm = false;
+        }, 100);
     }
+    
     console.log(`[ConfirmHandler] END - timestamp: ${Date.now()}`);
 }
 

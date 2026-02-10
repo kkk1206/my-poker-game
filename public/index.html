@@ -381,6 +381,11 @@
                     console.log('[Frontend] waitingForConfirm:', gameState.waitingForConfirm);
                     console.log('[Frontend] confirmedPlayers:', gameState.confirmedPlayers);
                     updateGame(gameState);
+                    
+                    // 重置確認按鈕標記
+                    if (!gameState.waitingForConfirm) {
+                        confirmButtonClicked = false;
+                    }
                     break;
                 case 'error':
                     alert(message.message);
@@ -405,25 +410,36 @@
             const startTime = performance.now();
             console.log(`[UpdateGame] START - timestamp: ${Date.now()}`);
             
-            // 更新底池（包含邊池）
-            if (state.pots && state.pots.length > 0) {
-                const potDisplay = state.pots.map(pot => 
-                    `${pot.name}: $${pot.amount}`
-                ).join(' | ');
-                document.getElementById('pot').innerHTML = potDisplay;
-            } else {
-                document.getElementById('pot').textContent = state.pot;
-            }
+            // 使用 requestAnimationFrame 優化渲染
+            requestAnimationFrame(() => {
+                // 更新底池（包含邊池）
+                const potElement = document.getElementById('pot');
+                if (state.pots && state.pots.length > 0) {
+                    const potDisplay = state.pots.map(pot => 
+                        `${pot.name}: $${pot.amount}`
+                    ).join(' | ');
+                    if (potElement.innerHTML !== potDisplay) {
+                        potElement.innerHTML = potDisplay;
+                    }
+                } else {
+                    const potText = String(state.pot);
+                    if (potElement.textContent !== potText) {
+                        potElement.textContent = potText;
+                    }
+                }
 
-            // 更新公共牌
-            const communityCards = document.getElementById('community-cards');
-            communityCards.innerHTML = state.communityCards.map(card => 
-                renderCard(card)
-            ).join('');
+                // 更新公共牌
+                const communityCards = document.getElementById('community-cards');
+                const communityHTML = state.communityCards.map(card => 
+                    renderCard(card)
+                ).join('');
+                if (communityCards.innerHTML !== communityHTML) {
+                    communityCards.innerHTML = communityHTML;
+                }
 
-            // 更新玩家
-            const playersDiv = document.getElementById('players');
-            playersDiv.innerHTML = state.players.map(player => {
+                // 更新玩家
+                const playersDiv = document.getElementById('players');
+                const playersHTML = state.players.map(player => {
                 const isCurrentUser = player.id === playerId;
                 const isActive = player.id === state.currentPlayer;
                 
@@ -461,10 +477,15 @@
                         </div>
                     </div>
                 `;
-            }).join('');
+                }).join('');
+                
+                // 只在內容改變時更新 DOM
+                if (playersDiv.innerHTML !== playersHTML) {
+                    playersDiv.innerHTML = playersHTML;
+                }
 
-            // 更新狀態訊息
-            const statusDiv = document.getElementById('game-status');
+                // 更新狀態訊息
+                const statusDiv = document.getElementById('game-status');
             if (state.winners) {
                 if (state.winners.length === 1) {
                     statusDiv.textContent = `🎉 ${state.winners[0].name} 獲勝！贏得 $${state.winners[0].winAmount}`;
@@ -508,10 +529,11 @@
             }
 
             // 更新按鈕狀態
-            updateButtons(state);
-            
-            const endTime = performance.now();
-            console.log(`[UpdateGame] END - took ${(endTime - startTime).toFixed(2)}ms`);
+                updateButtons(state);
+                
+                const endTime = performance.now();
+                console.log(`[UpdateGame] END - took ${(endTime - startTime).toFixed(2)}ms`);
+            }); // 關閉 requestAnimationFrame
         }
         
         // 取得手牌類型名稱（前端版本）
@@ -661,9 +683,20 @@
             }
         });
 
+        let confirmButtonClicked = false;
+        
         document.getElementById('confirm-result-btn').addEventListener('click', () => {
             console.log('[Frontend] ========== Confirm Button Clicked ==========');
             console.log('[Frontend] Timestamp:', Date.now());
+            
+            // 防止重複點擊
+            if (confirmButtonClicked) {
+                console.log('[Frontend] Button already clicked, ignoring');
+                return;
+            }
+            
+            confirmButtonClicked = true;
+            
             console.log('[Frontend] roomId:', roomId);
             console.log('[Frontend] playerId:', playerId);
             console.log('[Frontend] WebSocket state:', ws ? ws.readyState : 'null');
@@ -672,18 +705,21 @@
             if (!ws) {
                 console.error('[Frontend] ERROR: WebSocket is null!');
                 alert('連線已斷開，請重新整理頁面');
+                confirmButtonClicked = false;
                 return;
             }
             
             if (ws.readyState !== WebSocket.OPEN) {
                 console.error('[Frontend] ERROR: WebSocket not open! State:', ws.readyState);
                 alert('連線不穩定，請重新整理頁面');
+                confirmButtonClicked = false;
                 return;
             }
             
             if (!roomId || !playerId) {
                 console.error('[Frontend] ERROR: Missing roomId or playerId!');
                 alert('遊戲狀態錯誤，請重新整理頁面');
+                confirmButtonClicked = false;
                 return;
             }
             
@@ -693,9 +729,15 @@
             try {
                 ws.send(JSON.stringify(message));
                 console.log('[Frontend] Message sent successfully');
+                
+                // 3秒後重置，允許再次點擊（以防萬一）
+                setTimeout(() => {
+                    confirmButtonClicked = false;
+                }, 3000);
             } catch (error) {
                 console.error('[Frontend] ERROR sending message:', error);
                 alert('發送訊息失敗：' + error.message);
+                confirmButtonClicked = false;
             }
         });
     </script>
