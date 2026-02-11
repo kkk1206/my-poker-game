@@ -1091,7 +1091,7 @@ function endRound(gameState, winners, showdownPlayers = null) {
 }
 
 // 廣播遊戲狀態
-function broadcastGameState(gameState) {
+function broadcastGameState(gameState, messageType = 'gameUpdate') {
     const startTime = Date.now();
     console.log(`[Broadcast] START - timestamp: ${startTime}`);
     
@@ -1105,14 +1105,36 @@ function broadcastGameState(gameState) {
     console.log(`[Broadcast] Broadcasting to ${room.players.length} players`);
 
     room.players.forEach(player => {
+        // 創建一個乾淨的狀態對象，排除不能序列化的屬性
         const playerState = {
-            ...gameState,
+            deck: gameState.deck,
+            communityCards: gameState.communityCards,
+            pot: gameState.pot,
+            sidePots: gameState.sidePots,
+            stage: gameState.stage,
+            smallBlind: gameState.smallBlind,
+            bigBlind: gameState.bigBlind,
+            lastRaiseAmount: gameState.lastRaiseAmount,
+            roundActions: gameState.roundActions,
+            actionLog: gameState.actionLog,
+            handNumber: gameState.handNumber,
+            isFirstRound: gameState.isFirstRound,
+            // 不包含 actionTimer（會造成循環引用）
             currentPlayer: gameState.players[gameState.currentPlayerIdx]?.id,
-            dealerPlayerId: gameState.dealerPlayerId,  // 加入莊家 ID
+            dealerPlayerId: gameState.dealerPlayerId,
             maxBet: maxBet,
             players: gameState.players.map(p => ({
-                ...p,
-                isDealer: p.id === gameState.dealerPlayerId,  // 標記莊家
+                id: p.id,
+                name: p.name,
+                chips: p.chips,
+                currentBet: p.currentBet,
+                totalBet: p.totalBet,
+                folded: p.folded,
+                hasActed: p.hasActed,
+                actedThisRound: p.actedThisRound,
+                position: p.position,
+                winAmount: p.winAmount,
+                isDealer: p.id === gameState.dealerPlayerId,
                 // 在 showdown 只顯示未棄牌玩家的牌，否則只顯示自己的牌
                 cards: (gameState.showdownPlayers && !p.folded) || p.id === player.id ? p.cards : 
                        (p.cards && p.cards.length > 0 ? [{}, {}] : [])
@@ -1128,7 +1150,7 @@ function broadcastGameState(gameState) {
         
         if (player.ws.readyState === WebSocket.OPEN) {
             player.ws.send(JSON.stringify({
-                type: 'gameUpdate',
+                type: messageType,
                 gameState: playerState
             }));
         }
@@ -1274,20 +1296,8 @@ function handleStartGame(roomId) {
     room.gameState = gameState;
     startNewRound(gameState);
 
-    room.players.forEach(player => {
-        if (player.ws.readyState === WebSocket.OPEN) {
-            const playerState = {
-                ...gameState,
-                currentPlayer: gameState.players[gameState.currentPlayerIdx]?.id
-            };
-            player.ws.send(JSON.stringify({
-                type: 'gameStarted',
-                gameState: playerState
-            }));
-        }
-    });
-
-    broadcastGameState(gameState);
+    // 使用 gameStarted 訊息類型廣播
+    broadcastGameState(gameState, 'gameStarted');
     
     // 為第一個玩家啟動計時器
     startActionTimer(gameState, roomId);
@@ -1334,39 +1344,45 @@ function handlePlayerConfirmResult(data) {
     
     room.processingConfirm = true;
 
-    console.log(`[ConfirmHandler] Calling handleConfirmResult - timestamp: ${Date.now()}`);
-    const result = handleConfirmResult(room.gameState, data.playerId);
-    console.log(`[ConfirmHandler] Result received - timestamp: ${Date.now()}`, result);
-    
-    if (result.error) {
-        const player = room.players.find(p => p.id === data.playerId);
-        if (player && player.ws.readyState === WebSocket.OPEN) {
-            player.ws.send(JSON.stringify({
-                type: 'error',
-                message: result.error
-            }));
-        }
-        room.processingConfirm = false;
-        return;
-    }
-
-    console.log(`[ConfirmHandler] Broadcasting game state - timestamp: ${Date.now()}`);
-    broadcastGameState(room.gameState);
-    console.log(`[ConfirmHandler] Broadcast complete - timestamp: ${Date.now()}`);
-    
-    // 如果開始了新回合，啟動計時器
-    if (result.newRound) {
-        console.log(`[ConfirmHandler] Starting new round timer - timestamp: ${Date.now()}`);
-        startActionTimer(room.gameState, data.roomId);
-        room.processingConfirm = false;
-    } else {
-        // 稍後重置標記，允許其他玩家確認
-        setTimeout(() => {
+    try {
+        console.log(`[ConfirmHandler] Calling handleConfirmResult - timestamp: ${Date.now()}`);
+        const result = handleConfirmResult(room.gameState, data.playerId);
+        console.log(`[ConfirmHandler] Result received - timestamp: ${Date.now()}`, result);
+        
+        if (result.error) {
+            const player = room.players.find(p => p.id === data.playerId);
+            if (player && player.ws.readyState === WebSocket.OPEN) {
+                player.ws.send(JSON.stringify({
+                    type: 'error',
+                    message: result.error
+                }));
+            }
             room.processingConfirm = false;
-        }, 100);
+            return;
+        }
+
+        console.log(`[ConfirmHandler] Broadcasting game state - timestamp: ${Date.now()}`);
+        broadcastGameState(room.gameState);
+        console.log(`[ConfirmHandler] Broadcast complete - timestamp: ${Date.now()}`);
+        
+        // 如果開始了新回合，啟動計時器
+        if (result.newRound) {
+            console.log(`[ConfirmHandler] Starting new round timer - timestamp: ${Date.now()}`);
+            startActionTimer(room.gameState, data.roomId);
+            room.processingConfirm = false;
+        } else {
+            // 稍後重置標記，允許其他玩家確認
+            setTimeout(() => {
+                room.processingConfirm = false;
+            }, 100);
+        }
+        
+        console.log(`[ConfirmHandler] END - timestamp: ${Date.now()}`);
+    } catch (error) {
+        console.error(`[ConfirmHandler] ERROR:`, error);
+        room.processingConfirm = false; // 錯誤時也要重置
+        throw error; // 重新拋出錯誤以便記錄
     }
-    
-    console.log(`[ConfirmHandler] END - timestamp: ${Date.now()}`);
 }
 
 const PORT = process.env.PORT || 3000;
