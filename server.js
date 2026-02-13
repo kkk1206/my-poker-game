@@ -575,41 +575,32 @@ function moveToNextPlayer(gameState) {
 function isRoundComplete(gameState) {
     // 未棄牌的玩家
     const activePlayers = gameState.players.filter(p => !p.folded);
-    
+
     // 只剩一個玩家（其他都棄牌）
     if (activePlayers.length === 1) {
         return true;
     }
-    
+
+    const maxBet = Math.max(...activePlayers.map(p => p.currentBet));
+
     // 還能行動的玩家（未棄牌且有籌碼）
     const playersWithChips = activePlayers.filter(p => p.chips > 0);
-    
-    // 所有還能行動的玩家都 all-in 了（只剩 0 或 1 個玩家有籌碼）
-    if (playersWithChips.length <= 1) {
+
+    // 所有人都 all-in（沒有任何人有籌碼），回合直接完成
+    if (playersWithChips.length === 0) {
         return true;
     }
 
-    const maxBet = Math.max(...gameState.players.map(p => p.currentBet));
-    
-    // 在翻牌前的第一輪，檢查更嚴格
+    // *** 核心修正 ***
+    // 「只剩1人有籌碼」不等於「那個人已行動」
+    // 必須確認：每個有籌碼的玩家都已行動，且下注金額等於 maxBet
+    // （或 all-in 玩家的注碼已被納入 maxBet 計算，有籌碼的玩家仍需跟注決定）
     if (gameState.stage === 'preflop' && gameState.isFirstRound) {
-        // 所有還能行動的玩家必須：
-        // 1. 下注金額等於最大下注
-        // 2. 已經主動行動過（actedThisRound）
-        const allPlayersReady = playersWithChips.every(p => {
-            const betMatches = p.currentBet === maxBet;
-            return betMatches && p.actedThisRound;
-        });
-        
-        return allPlayersReady;
+        // 翻牌前第一輪：用 actedThisRound 判斷（保護大盲 option）
+        return playersWithChips.every(p => p.actedThisRound && p.currentBet === maxBet);
     } else {
-        // 其他情況：所有還能行動的玩家必須下注相同且已行動
-        const allPlayersReady = playersWithChips.every(p => {
-            const betMatches = p.currentBet === maxBet;
-            return betMatches && p.hasActed;
-        });
-        
-        return allPlayersReady;
+        // 其他情況：所有有籌碼的玩家已行動且下注一致
+        return playersWithChips.every(p => p.hasActed && p.currentBet === maxBet);
     }
 }
 
@@ -637,9 +628,11 @@ function advanceStage(gameState) {
 
     // 檢查是否還有玩家能行動
     const playersWithChips = activePlayers.filter(p => p.chips > 0);
-    const allPlayersAllIn = playersWithChips.length <= 1;
+    // *** 修正：只有當「沒有任何人有籌碼」才是真正的全員 all-in ***
+    // 如果有人有籌碼但籌碼已被 call 到位，也算完成（此時 isRoundComplete 已驗證）
+    const allPlayersAllIn = playersWithChips.length === 0;
 
-    // 如果所有人都 all-in，直接發完所有牌到 showdown
+    // 如果所有人都 all-in（無人有籌碼），直接發完所有牌到 showdown
     if (allPlayersAllIn) {
         // 清除計時器（沒有玩家需要行動）
         if (gameState.actionTimer) {
